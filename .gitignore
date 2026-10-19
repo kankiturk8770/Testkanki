@@ -1,6 +1,7 @@
 *.o
 server/kanki-server
 server/kanki-client
+server/kanki-vpnd
 server/kanki-client-android
 client-android/.gradle/
 client-android/build/
