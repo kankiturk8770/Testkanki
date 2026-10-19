@@ -12,8 +12,8 @@ target_compile_options(kanki PRIVATE -O2 -Wall)
 
 if(OPENSSL_ROOT)
     target_include_directories(kanki PRIVATE ${OPENSSL_ROOT}/include)
-    target_link_directories(kanki PRIVATE ${OPENSSL_ROOT}/lib)
-    target_link_libraries(kanki crypto log)
+    # static libcrypto (build-openssl.sh) -> nothing extra to package in the APK
+    target_link_libraries(kanki ${OPENSSL_ROOT}/lib/libcrypto.a log)
 else()
     # fallback: expect libcrypto on the default search path
     target_link_libraries(kanki crypto log)

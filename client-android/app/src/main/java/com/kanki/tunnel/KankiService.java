@@ -27,7 +27,7 @@ public class KankiService extends Service {
                 .setContentTitle("KANKI tunnel")
                 .setContentText("127.0.0.1:" + i.getIntExtra("localPort", 5000) +
                         " → " + i.getStringExtra("server"))
-                .setSmallIcon(android.R.drawable.stat_sys_vpn_ic)
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .addAction(0, "Stop", pi)
                 .setOngoing(true).build();
         startForeground(1, n);

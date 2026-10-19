@@ -1,4 +1,9 @@
 *.o
+server/kanki-server
+server/kanki-client
+server/kanki-client-android
 client-android/.gradle/
+client-android/build/
 client-android/app/build/
+client-android/app/.cxx/
 client-android/local.properties

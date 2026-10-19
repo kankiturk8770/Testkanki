@@ -14,17 +14,16 @@ extend this project with a VpnService that forwards to 127.0.0.1:<localPort>.
 
 ## Build
 
-1. Build OpenSSL for Android once:
+1. Build a static OpenSSL (libcrypto) for Android once (needs NDK 26.3.11579264):
    ```
-   git clone https://github.com/openssl/openssl && cd openssl
-   ./Configure android-arm64 -D__ANDROID_API__=26
-   make -j && make install DESTDIR=$HOME/openssl-android
+   ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/26.3.11579264 ./build-openssl.sh $HOME/openssl-android arm64-v8a
    ```
-2. Open this folder in Android Studio and run:
+2. Build the APK (or open this folder in Android Studio and add
+   `OPENSSL_ROOT=/home/you/openssl-android` to `gradle.properties`):
    ```
    ./gradlew assembleDebug -POPENSSL_ROOT=$HOME/openssl-android
    ```
-   (edit app/src/main/cpp/CMakeLists.txt if your path differs)
+   The APK is built for arm64-v8a (the ABI OpenSSL was built for).
 
 3. Install: `adb install app/build/outputs/apk/debug/app-debug.apk`
 

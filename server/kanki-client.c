@@ -15,6 +15,22 @@ static int parse_psk(const char *hex, uint8_t psk[32]) {
     return 0;
 }
 
+/* one wire packet from the server: deliver DATA (plus anything FEC rebuilt)
+   to the local app, answer with TUNE if auto-tune asks for it */
+static void tunnel_in(kanki_link *down, int tfd, const struct sockaddr_in *server,
+                      int lfd, const uint8_t *buf, int n,
+                      const struct sockaddr_in *app, socklen_t alen, int have_app) {
+    kanki_pkt pkt;
+    int r = link_recv(down, buf, n, &pkt);
+    while (r) {
+        if (have_app && (pkt.flags & FLAG_DATA))
+            sendto(lfd, pkt.payload, pkt.payload_len, 0, (const struct sockaddr *)app, alen);
+        r = link_recv_stashed(down, &pkt);
+    }
+    if (down->pending_tune)
+        link_send_tune(down, tfd, (const struct sockaddr *)server, sizeof *server);
+}
+
 int main(int argc, char **argv) {
     const char *listen_s = NULL, *server_s = NULL, *psk_hex = NULL;
     int repeat = DEFAULT_REPEAT, fec_k = DEFAULT_FEC_K, fec_on = 1, autotune = 0, faketcp = 0, jitter = 1500;
@@ -65,12 +81,14 @@ int main(int argc, char **argv) {
     link_init(&down, psk, repeat, fec_k, fec_on);
     up.autotune = autotune; down.autotune = autotune;
     up.cfg.jitter_us = jitter; down.cfg.jitter_us = jitter;
+    down.tx = &up;                     /* TUNE from the server adjusts what we send it */
     ftcp_t ft = {0};
     if (faketcp) {
         if (ftcp_open(&ft, 40000 + (getpid() % 20000)) < 0) { perror("raw socket (need root)"); return 1; }
-        ft.local_ip = INADDR_ANY;
         ft.remote_ip = server.sin_addr.s_addr;
         ft.remote_port = ntohs(server.sin_port);
+        ft.local_ip = ftcp_route_src(ft.remote_ip, ft.remote_port);
+        ft.pinned = 1;                 /* only segments from the server */
         up.ft = &ft;
         fprintf(stderr, "[kanki] fake-TCP mode (root)\n");
     }
@@ -82,37 +100,35 @@ int main(int argc, char **argv) {
 
     signal(SIGINT, on_sig); signal(SIGTERM, on_sig);
     fprintf(stderr, "[kanki] client %s:%s -> %s:%s  repeat=%d fec=%s(k=%d)\n",
-            lhost, lport, shost, sport, up.cfg.repeat, fec_on ? "on" : "off", fec_k);
+            lhost, lport, shost, sport, up.cfg.repeat, fec_on ? "on" : "off", up.cfg.fec_k);
 
     struct sockaddr_in app = {0}; socklen_t alen = sizeof app; int have_app = 0;
     uint8_t buf[KANKI_MAX_PKT];
-    int maxfd = (tfd > lfd ? tfd : lfd) + 1;
+    int maxfd = tfd > lfd ? tfd : lfd;
+    if (faketcp && ft.fd > maxfd) maxfd = ft.fd;
     while (running) {
         fd_set rf; FD_ZERO(&rf); FD_SET(tfd, &rf); FD_SET(lfd, &rf);
-        struct timeval tv = { .tv_sec = 0, .tv_usec = 200000 };
-        if (select(maxfd, &rf, NULL, NULL, &tv) <= 0) {
-            link_fec_flush(&up, tfd, (struct sockaddr *)&server, sizeof server);
-            continue;
-        }
+        if (faketcp) FD_SET(ft.fd, &rf);
+        struct timeval tv = link_poll_tv(&up);
+        int sel = select(maxfd + 1, &rf, NULL, NULL, &tv);
+        link_fec_idle(&up, tfd, (struct sockaddr *)&server, sizeof server);
+        if (sel <= 0) continue;
         if (FD_ISSET(lfd, &rf)) {                 /* from local app */
             struct sockaddr_in from; socklen_t flen = sizeof from;
             ssize_t n = recvfrom(lfd, buf, sizeof buf, 0, (struct sockaddr *)&from, &flen);
             if (n > 0) {
-                if (!have_app) { app = from; alen = flen; have_app = 1; }
+                app = from; alen = flen; have_app = 1;   /* follow the app's latest port */
                 link_send(&up, tfd, (struct sockaddr *)&server, sizeof server,
                           FLAG_DATA, buf, (uint16_t)n);
             }
         }
         if (FD_ISSET(tfd, &rf)) {                 /* from kanki server */
             ssize_t n = recvfrom(tfd, buf, sizeof buf, 0, NULL, NULL);
-            if (n > 0 && have_app) {
-                kanki_pkt pkt;
-                if (link_recv(&down, buf, (int)n, &pkt) && (pkt.flags & FLAG_DATA))
-                    sendto(lfd, pkt.payload, pkt.payload_len, 0,
-                           (struct sockaddr *)&app, alen);
-                if (down.pending_tune)
-                    link_send_tune(&up, tfd, (struct sockaddr *)&server, sizeof server);
-            }
+            if (n > 0) tunnel_in(&down, tfd, &server, lfd, buf, (int)n, &app, alen, have_app);
+        }
+        if (faketcp && FD_ISSET(ft.fd, &rf)) {    /* from kanki server, fake-TCP */
+            int n = ftcp_recv(&ft, buf, sizeof buf, NULL, NULL, NULL);
+            if (n > 0) tunnel_in(&down, tfd, &server, lfd, buf, n, &app, alen, have_app);
         }
     }
     /* graceful tail: multiplied 10x + FEC flush -> no lost last packet */

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
@@ -18,6 +19,8 @@
 #define KANKI_TAG_LEN   16
 #define KANKI_MAX_PAD   48
 #define KANKI_MAX_PKT   (KANKI_MAX_MTU + 256)
+#define KANKI_FEC_HDR   3                    /* flags + len, XORed into parity */
+#define KANKI_MAX_PAYLOAD (KANKI_MAX_MTU + KANKI_FEC_HDR)
 
 #define FLAG_DATA    0x01
 #define FLAG_PARITY  0x02
@@ -41,6 +44,9 @@ typedef struct {
     uint64_t tx_seq;
     uint64_t epoch;
     int      jitter_us;      /* inter-copy jitter in microseconds */
+    uint64_t rx_epoch;       /* epoch the rx key cache below was built for */
+    uint8_t  rx_key[3][32];  /* epoch-1, epoch, epoch+1 (clock skew) */
+    uint8_t  rx_keyid[3];
 } kanki_cfg;
 
 /* ---------- crypto ---------- */
@@ -48,8 +54,9 @@ typedef struct {
 static void kanki_jitter_us(int max_us) {
     if (max_us <= 0) return;
     struct timespec ts;
-    ts.tv_sec = 0;
-    ts.tv_nsec = (long)(rand() % max_us) * 1000L;
+    long us = (long)(rand() % max_us);
+    ts.tv_sec = us / 1000000;
+    ts.tv_nsec = (us % 1000000) * 1000L;
     nanosleep(&ts, NULL);
 }
 
@@ -81,8 +88,12 @@ static void kanki_init(kanki_cfg *c, const uint8_t psk[32], int repeat, int fec_
     c->repeat = repeat < MIN_REPEAT ? MIN_REPEAT : (repeat > MAX_REPEAT ? MAX_REPEAT : repeat);
     c->fec_k  = fec_k < 2 ? 2 : (fec_k > MAX_FEC_K ? MAX_FEC_K : fec_k);
     c->fec_enabled = fec_on;
-    c->tx_seq = 1;
+    /* seq space starts at wall-clock µs*16 so a restarted peer is never
+       mistaken for a replay of the previous session by the dedup window */
+    struct timeval tv; gettimeofday(&tv, NULL);
+    c->tx_seq = (((uint64_t)tv.tv_sec * 1000000u + (uint64_t)tv.tv_usec) << 4) | 1;
     c->jitter_us = 1500;
+    c->rx_epoch = 0;
     kanki_derive_epoch(c, kanki_now_epoch());
     RAND_poll();
 }
@@ -94,33 +105,16 @@ typedef struct {
     uint8_t  fec_idx;
     uint8_t  fec_k;
     uint16_t payload_len;
-    uint8_t  payload[KANKI_MAX_MTU];
+    uint8_t  payload[KANKI_MAX_PAYLOAD];
 } kanki_pkt;
-
-/* GCM IV derivation: random IV sent in clear (harmless), AAD = keyid+iv. */
-static void kanki_iv(const uint8_t key[32], uint64_t seq, uint8_t iv[12]) {
-    uint8_t info[10];
-    info[0] = 'i'; info[1] = 'v';
-    for (int i = 0; i < 8; i++) info[2 + i] = (uint8_t)(seq >> (8 * (7 - i)));
-    EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, NULL);
-    size_t l = 12;
-    EVP_PKEY_derive_init(pctx);
-    EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_sha256());
-    EVP_PKEY_CTX_set1_hkdf_salt(pctx, (uint8_t *)"", 0);
-    EVP_PKEY_CTX_set1_hkdf_key(pctx, (uint8_t *)key, 32);
-    EVP_PKEY_CTX_add1_hkdf_info(pctx, info, 10);
-    EVP_PKEY_derive(pctx, iv, &l);
-    EVP_PKEY_CTX_free(pctx);
-}
 
 static int kanki_seal2(kanki_cfg *c, uint8_t flags, uint64_t seq,
                        uint32_t fec_block, uint8_t fec_idx, uint8_t fec_k,
                        const uint8_t *payload, uint16_t plen, uint8_t *out) {
     if (kanki_now_epoch() != c->epoch) kanki_derive_epoch(c, kanki_now_epoch());
+    /* fresh random 96-bit GCM IV per copy, sent in clear */
     uint8_t iv[12];
-    kanki_iv(c->enc_key, seq ^ ((uint64_t)fec_idx << 56) ^ ((uint64_t)rand() << 1), iv);
-    /* NOTE: IV must be reproducible ONLY by sender; receiver uses tag check,
-       so uniqueness per copy is what matters (rand salt above). */
+    RAND_bytes(iv, sizeof iv);
 
     uint8_t plain[KANKI_MAX_PKT], *p = plain;
     uint8_t padlen = 0; RAND_bytes(&padlen, 1); padlen %= (KANKI_MAX_PAD + 1);
@@ -131,15 +125,15 @@ static int kanki_seal2(kanki_cfg *c, uint8_t flags, uint64_t seq,
     *p++ = (uint8_t)(fec_block >> 8);  *p++ = (uint8_t)fec_block;
     *p++ = fec_idx; *p++ = fec_k;
     *p++ = (uint8_t)(plen >> 8); *p++ = (uint8_t)plen;
-    memcpy(p, payload, plen); p += plen;
+    if (plen) memcpy(p, payload, plen);
+    p += plen;
     p += padlen;
     int plain_len = (int)(p - plain);
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     int len, total = 0;
     out[0] = c->keyid;
-    out[1] = iv[0]; /* store 12-byte IV in clear — random-looking, harmless */
-    memcpy(out + 1, iv, 12);
+    memcpy(out + 1, iv, 12);   /* 12-byte IV in clear — random-looking, harmless */
     EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL);
     EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL);
     EVP_EncryptInit_ex(ctx, NULL, NULL, c->enc_key, iv);
@@ -153,20 +147,34 @@ static int kanki_seal2(kanki_cfg *c, uint8_t flags, uint64_t seq,
     return total + KANKI_TAG_LEN + 13;
 }
 
-static int kanki_open2(kanki_cfg *c, const uint8_t *in, int inlen, kanki_pkt *pkt) {
-    if (inlen < 13 + 14 + KANKI_TAG_LEN) return -1;
-    for (int e = 0; e < 2; e++) {
+/* (re)build the rx key cache for the current epoch and its neighbours */
+static void kanki_rx_refresh(kanki_cfg *c) {
+    uint64_t now = kanki_now_epoch();
+    if (c->rx_epoch == now) return;
+    for (int i = 0; i < 3; i++) {
         kanki_cfg tmp = *c;
-        if (e == 1) kanki_derive_epoch(&tmp, c->epoch - 1);
-        if (in[0] != tmp.keyid) continue;
+        kanki_derive_epoch(&tmp, now - 1 + (uint64_t)i);
+        memcpy(c->rx_key[i], tmp.enc_key, 32);
+        c->rx_keyid[i] = tmp.keyid;
+    }
+    c->rx_epoch = now;
+}
+
+static int kanki_open2(kanki_cfg *c, const uint8_t *in, int inlen, kanki_pkt *pkt) {
+    if (inlen < 13 + 18 + KANKI_TAG_LEN || inlen - 13 - KANKI_TAG_LEN > KANKI_MAX_PKT) return -1;
+    kanki_rx_refresh(c);
+    static const int order[3] = { 1, 0, 2 };          /* current epoch first */
+    for (int e = 0; e < 3; e++) {
+        const uint8_t *key = c->rx_key[order[e]];
+        if (in[0] != c->rx_keyid[order[e]]) continue;
         EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
         uint8_t plain[KANKI_MAX_PKT];
         int len, total = 0;
         EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL);
         EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL);
-        EVP_DecryptInit_ex(ctx, NULL, NULL, tmp.enc_key, in + 1);
+        EVP_DecryptInit_ex(ctx, NULL, NULL, key, in + 1);
         EVP_DecryptUpdate(ctx, NULL, &len, in, 13);
-        if (EVP_DecryptUpdate(ctx, plain, &len, in + 13, inlen - 13 - KANKI_TAG_LEN) < 0)
+        if (!EVP_DecryptUpdate(ctx, plain, &len, in + 13, inlen - 13 - KANKI_TAG_LEN))
             { EVP_CIPHER_CTX_free(ctx); continue; }
         total = len;
         EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, KANKI_TAG_LEN, (void *)(in + inlen - KANKI_TAG_LEN));
@@ -174,7 +182,7 @@ static int kanki_open2(kanki_cfg *c, const uint8_t *in, int inlen, kanki_pkt *pk
             { EVP_CIPHER_CTX_free(ctx); continue; }
         total += len;
         EVP_CIPHER_CTX_free(ctx);
-        if (total < 14) return -1;
+        if (total < 18) return -1;
         uint8_t *p = plain;
         if (*p++ != KANKI_VERSION) return -1;
         pkt->flags = *p++;
@@ -186,7 +194,7 @@ static int kanki_open2(kanki_cfg *c, const uint8_t *in, int inlen, kanki_pkt *pk
         pkt->fec_k = *p++;
         pkt->payload_len = ((uint16_t)p[0] << 8) | p[1];
         p += 2;
-        if (pkt->payload_len > KANKI_MAX_MTU || p + pkt->payload_len > plain + total) return -1;
+        if (pkt->payload_len > KANKI_MAX_PAYLOAD || p + pkt->payload_len > plain + total) return -1;
         memcpy(pkt->payload, p, pkt->payload_len);
         return 0;
     }
@@ -195,20 +203,23 @@ static int kanki_open2(kanki_cfg *c, const uint8_t *in, int inlen, kanki_pkt *pk
 
 /* ---------- dedup window ---------- */
 #define DEDUP_BITS (1 << 16)
-typedef struct { uint64_t base; uint8_t bits[DEDUP_BITS / 8]; } dedup_t;
+typedef struct { uint64_t top; uint8_t bits[DEDUP_BITS / 8]; } dedup_t;
 
-static void dedup_init(dedup_t *d) { d->base = 0; memset(d->bits, 0, sizeof(d->bits)); }
+static void dedup_init(dedup_t *d) { d->top = 0; memset(d->bits, 0, sizeof(d->bits)); }
 
-/* returns 1 if this seq was already seen (drop), 0 if new */
+/* sliding window over the last DEDUP_BITS seqs below the highest one seen.
+   returns 1 if this seq was already seen (drop), 0 if new */
 static int dedup_seen(dedup_t *d, uint64_t seq) {
-    if (d->base == 0) { d->base = seq; }
-    if (seq < d->base) return 1;
-    uint64_t off = seq - d->base;
-    if (off >= DEDUP_BITS) {                       /* slide window */
-        memset(d->bits, 0, sizeof(d->bits));
-        d->base = seq;
-        off = 0;
+    if (seq > d->top) {
+        uint64_t gap = seq - d->top;
+        if (d->top == 0 || gap >= DEDUP_BITS) memset(d->bits, 0, sizeof(d->bits));
+        else for (uint64_t s = d->top + 1; s <= seq; s++)
+            d->bits[(s % DEDUP_BITS) >> 3] &= (uint8_t)~(1 << (s & 7));
+        d->top = seq;
+    } else if (d->top - seq >= DEDUP_BITS) {
+        return 1;                                  /* too old */
     }
+    uint64_t off = seq % DEDUP_BITS;
     uint8_t mask = (uint8_t)(1 << (off & 7));
     uint8_t *b = &d->bits[off >> 3];
     if (*b & mask) return 1;
@@ -216,78 +227,95 @@ static int dedup_seen(dedup_t *d, uint64_t seq) {
     return 0;
 }
 
-/* ---------- XOR FEC ---------- */
+/* ---------- XOR FEC ----------
+   Parity = XOR of every shard as [flags(1) | len(2) | payload], zero-padded
+   to the longest; the parity packet's seq field carries the XOR of the shard
+   seqs and its fec_k field the real shard count of the block (a partial block
+   flushed on idle/TAIL has fewer than k shards). So one lost shard is rebuilt
+   exactly: flags, seq, length and payload. */
 typedef struct {
     uint32_t block;
     uint8_t  have[MAX_FEC_K + 1];     /* last slot = parity */
     uint16_t len[MAX_FEC_K + 1];
-    uint8_t  data[MAX_FEC_K + 1][KANKI_MAX_MTU];
-    uint8_t  k;
+    uint8_t  data[MAX_FEC_K + 1][KANKI_MAX_PAYLOAD];
+    uint8_t  k;                       /* shard count, known once parity arrives */
     uint64_t seq[MAX_FEC_K + 1];
     uint8_t  flags[MAX_FEC_K + 1];
 } fec_block_t;
 
 #define FEC_CACHE 32
-typedef struct { fec_block_t blk[FEC_CACHE]; uint64_t tx_block; uint8_t tx_idx;
-                 uint16_t par_len; uint8_t parity[KANKI_MAX_MTU];
-                 uint64_t par_seq[MAX_FEC_K]; uint8_t par_flags[MAX_FEC_K];
-                 uint16_t par_shard_len[MAX_FEC_K]; } fec_t;
+typedef struct { fec_block_t blk[FEC_CACHE]; uint32_t next_evict; } fec_t;
 
 static void fec_init(fec_t *f) {
     memset(f, 0, sizeof(*f));
     for (int i = 0; i < FEC_CACHE; i++) f->blk[i].block = 0xFFFFFFFF;
-    f->tx_block = 1; f->tx_idx = 0;
 }
 
 static void fec_xor(uint8_t *dst, const uint8_t *src, int n) {
     for (int i = 0; i < n; i++) dst[i] ^= src[i];
 }
 
+/* XOR one shard, framed as [flags|len|payload], into dst */
+static void fec_xor_shard(uint8_t *dst, uint8_t flags, const uint8_t *payload, uint16_t plen) {
+    dst[0] ^= flags;
+    dst[1] ^= (uint8_t)(plen >> 8);
+    dst[2] ^= (uint8_t)plen;
+    if (plen) fec_xor(dst + KANKI_FEC_HDR, payload, plen);
+}
+
 /* feed one shard of a block; if exactly one data shard missing and all others
    + parity present, reconstruct it. returns 1 + fills *out if recovered. */
 static int fec_feed(fec_t *f, const kanki_pkt *pkt, kanki_pkt *out) {
-    int k = pkt->fec_k;
-    if (k < 2 || k > MAX_FEC_K) return 0;
+    int is_par = pkt->fec_idx == FEC_PARITY_IDX;
+    if (!is_par && pkt->fec_idx >= MAX_FEC_K) return 0;
+    if (is_par && (pkt->fec_k < 1 || pkt->fec_k > MAX_FEC_K)) return 0;
     fec_block_t *b = NULL;
     for (int i = 0; i < FEC_CACHE; i++)
         if (f->blk[i].block == pkt->fec_block) { b = &f->blk[i]; break; }
     if (!b) {
         for (int i = 0; i < FEC_CACHE; i++)
             if (f->blk[i].block == 0xFFFFFFFF) { b = &f->blk[i]; break; }
-        if (!b) { b = &f->blk[0]; }                 /* evict oldest slot 0 */
+        if (!b) b = &f->blk[f->next_evict++ % FEC_CACHE];   /* evict round-robin */
         memset(b, 0, sizeof(*b));
-        b->block = pkt->fec_block; b->k = (uint8_t)k;
+        b->block = pkt->fec_block;
     }
-    int slot = (pkt->fec_idx == FEC_PARITY_IDX) ? k : pkt->fec_idx;
-    if (slot < 0 || slot > k || b->have[slot]) return 0;
+    int slot = is_par ? MAX_FEC_K : pkt->fec_idx;
+    if (b->have[slot]) return 0;
     b->have[slot] = 1;
     b->len[slot] = pkt->payload_len;
     memcpy(b->data[slot], pkt->payload, pkt->payload_len);
     b->seq[slot] = pkt->seq;
     b->flags[slot] = pkt->flags;
+    if (is_par) b->k = pkt->fec_k;
 
     /* can we recover exactly one missing data shard? */
-    int missing = -1, miss_cnt = 0;
+    if (!b->have[MAX_FEC_K]) return 0;
+    int k = b->k, missing = -1, miss_cnt = 0;
     for (int i = 0; i < k; i++) if (!b->have[i]) { missing = i; miss_cnt++; }
-    if (miss_cnt != 1 || !b->have[k]) return 0;
+    if (miss_cnt != 1) return 0;
 
-    uint16_t maxlen = 0;
-    for (int i = 0; i <= k; i++) if (i != missing && b->len[i] > maxlen) maxlen = b->len[i];
-    uint8_t rec[KANKI_MAX_MTU];
-    memcpy(rec, b->data[k], b->len[k]);
-    memset(rec + b->len[k], 0, maxlen > b->len[k] ? maxlen - b->len[k] : 0);
-    for (int i = 0; i < k; i++)
-        if (i != missing) fec_xor(rec, b->data[i], b->len[i]);
-    /* length recovery: we can't XOR lengths, so receiver pads to maxlen and
-       the upper layer trims; keep it simple: recovered len = maxlen. */
+    uint16_t plen = b->len[MAX_FEC_K];
+    if (plen < KANKI_FEC_HDR) return 0;
+    uint8_t rec[KANKI_MAX_PAYLOAD];
+    memcpy(rec, b->data[MAX_FEC_K], plen);
+    uint64_t seq = b->seq[MAX_FEC_K];
+    for (int i = 0; i < k; i++) {
+        if (i == missing) continue;
+        if (b->len[i] + KANKI_FEC_HDR > plen) return 0;      /* malformed */
+        fec_xor_shard(rec, b->flags[i], b->data[i], b->len[i]);
+        seq ^= b->seq[i];
+    }
+    uint16_t rlen = (uint16_t)((rec[1] << 8) | rec[2]);
+    if (rlen > KANKI_MAX_MTU || rlen + KANKI_FEC_HDR > plen) return 0;
+    b->have[missing] = 1;                       /* never rebuild it twice */
     memset(out, 0, sizeof(*out));
-    out->flags = b->flags[missing] ? b->flags[missing] : FLAG_DATA;
-    out->seq = b->seq[missing] ? b->seq[missing] : 0;
+    out->flags = rec[0];
+    out->seq = seq;
     out->fec_block = pkt->fec_block;
     out->fec_idx = (uint8_t)missing;
     out->fec_k = (uint8_t)k;
-    out->payload_len = maxlen;
-    memcpy(out->payload, rec, maxlen);
+    out->payload_len = rlen;
+    memcpy(out->payload, rec + KANKI_FEC_HDR, rlen);
     return 1;
 }
 

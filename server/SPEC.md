@@ -53,9 +53,13 @@ fec_k(1)  | payload_len(2) | payload | random_padding(0..48)
 ## 4. FEC (XOR parity, on top of multiplication)
 
 - Blocks of K data shards (config `--fec-k`, default 8) + 1 parity shard.
-- Parity = bytewise XOR of shards zero-padded to the largest shard in block.
-- Receiver buffers a block; if exactly one shard is missing when parity + K-1
-  shards are present, the missing shard is reconstructed instantly.
+- Parity = bytewise XOR of shards framed as `flags(1) | len(2) | payload`,
+  zero-padded to the largest shard in block. The parity packet's `seq` is the
+  XOR of the shard seqs and its `fec_k` the real number of shards in the block
+  (a flushed partial block has fewer than K).
+- Receiver buffers a block; if exactly one shard is missing when parity + the
+  other shards are present, the missing shard (flags, seq, exact length,
+  payload) is reconstructed instantly.
 - Flush: partial block is flushed (with parity) when data path idles >2 ms or
   on TAIL — so the **last packet of a burst is always FEC-protected too**.
 

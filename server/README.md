@@ -30,6 +30,21 @@ Client (point your game/app at 127.0.0.1:5000):
 ./kanki-client --listen 127.0.0.1:5000 --server YOUR_VPS:4000 --key <64hex> --repeat 6
 ```
 
+Both machines need a roughly correct clock (NTP): keys rotate every 10 minutes
+from wall-clock time; up to ±10 minutes of skew is tolerated.
+
+### Fake-TCP mode (`--faketcp`, root)
+
+Use `--faketcp` on **both** sides. The kernel does not know about the fake
+stream and answers it with TCP RSTs; drop them so middleboxes keep the flow:
+
+```
+# server (listen port 4000)
+iptables -A OUTPUT -p tcp --sport 4000 --tcp-flags RST RST -j DROP
+# client (any source port it picks, 40000-59999)
+iptables -A OUTPUT -p tcp -d YOUR_VPS --dport 4000 --tcp-flags RST RST -j DROP
+```
+
 ## Tuning
 
 | Flag | Range | Default | Meaning |

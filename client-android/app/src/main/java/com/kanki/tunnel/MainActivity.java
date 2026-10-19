@@ -1,6 +1,8 @@
 package com.kanki.tunnel;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
@@ -44,6 +46,10 @@ public class MainActivity extends AppCompatActivity {
             public void onStartTrackingTouch(SeekBar s) {}
             public void onStopTrackingTouch(SeekBar s) {}
         });
+
+        if (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, 1);
 
         btn.setOnClickListener(v -> toggle());
         refresh();

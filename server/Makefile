@@ -4,10 +4,10 @@ LDLIBS   = -lcrypto
 
 all: kanki-server kanki-client
 
-kanki-server: kanki-server.c kanki.h kanki_link.h
+kanki-server: kanki-server.c kanki.h kanki_link.h kanki_faketcp.h
 	$(CC) $(CFLAGS) -o $@ kanki-server.c $(LDLIBS)
 
-kanki-client: kanki-client.c kanki.h kanki_link.h
+kanki-client: kanki-client.c kanki.h kanki_link.h kanki_faketcp.h
 	$(CC) $(CFLAGS) -o $@ kanki-client.c $(LDLIBS)
 
 # Android (NDK):  make android NDK=/path/to/ndk ABI=arm64-v8a
