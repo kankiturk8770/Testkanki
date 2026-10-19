@@ -1,0 +1,18 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.kanki.tunnel'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'com.kanki.tunnel'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '0.2'
+        externalNativeBuild { cmake { cppFlags '' } }
+    }
+    externalNativeBuild {
+        cmake { path file('src/main/cpp/CMakeLists.txt') }
+    }
+}
+dependencies { implementation 'androidx.appcompat:appcompat:1.6.1' }

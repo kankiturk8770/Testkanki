@@ -1,0 +1,4 @@
+*.o
+client-android/.gradle/
+client-android/app/build/
+client-android/local.properties

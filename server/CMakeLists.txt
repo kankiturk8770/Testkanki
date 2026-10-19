@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(kanki C)
+set(CMAKE_C_STANDARD 11)
+find_package(OpenSSL REQUIRED)
+add_executable(kanki-server kanki-server.c)
+add_executable(kanki-client kanki-client.c)
+target_link_libraries(kanki-server OpenSSL::Crypto)
+target_link_libraries(kanki-client OpenSSL::Crypto)
