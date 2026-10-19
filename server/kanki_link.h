@@ -162,10 +162,9 @@ static struct timeval link_poll_tv(const kanki_link *l) {
     return tv;
 }
 
-/* receive one wire packet; returns payload via out. 1 = deliver, 0 = dup/recovered-nothing */
-static int link_recv(kanki_link *l, const uint8_t *wire, int wlen, kanki_pkt *out) {
-    kanki_pkt pkt;
-    if (kanki_open2(&l->cfg, wire, wlen, &pkt) != 0) return 0;
+/* process one already-decrypted packet (kanki_open2); same returns as link_recv */
+static int link_recv_pkt(kanki_link *l, const kanki_pkt *in, kanki_pkt *out) {
+    kanki_pkt pkt = *in;
     if (tune_apply(l, &pkt)) return 0;                 /* TUNE control */
     if (pkt.fec_idx != FEC_PARITY_IDX && l->cfg.fec_enabled && pkt.fec_k >= 2) {
         int dup = dedup_seen(&l->dedup, pkt.seq);
@@ -191,6 +190,13 @@ static int link_recv(kanki_link *l, const uint8_t *wire, int wlen, kanki_pkt *ou
     tune_note(l, 0, l->cfg.repeat);
     *out = pkt;
     return 1;
+}
+
+/* receive one wire packet; returns payload via out. 1 = deliver, 0 = dup/recovered-nothing */
+static int __attribute__((unused)) link_recv(kanki_link *l, const uint8_t *wire, int wlen, kanki_pkt *out) {
+    kanki_pkt pkt;
+    if (kanki_open2(&l->cfg, wire, wlen, &pkt) != 0) return 0;
+    return link_recv_pkt(l, &pkt, out);
 }
 
 /* FEC-recovered packet left over by the last link_recv(); 2 = deliver */

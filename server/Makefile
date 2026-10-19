@@ -2,7 +2,7 @@ CC      ?= gcc
 CFLAGS  ?= -O2 -Wall
 LDLIBS   = -lcrypto
 
-all: kanki-server kanki-client kanki-vpnd
+all: kanki-server kanki-client kanki-vpnd kanki-vpn
 
 kanki-server: kanki-server.c kanki.h kanki_link.h kanki_faketcp.h
 	$(CC) $(CFLAGS) -o $@ kanki-server.c $(LDLIBS)
@@ -13,6 +13,9 @@ kanki-client: kanki-client.c kanki.h kanki_link.h kanki_faketcp.h
 kanki-vpnd: kanki-vpnd.c kanki.h kanki_link.h kanki_faketcp.h
 	$(CC) $(CFLAGS) -o $@ kanki-vpnd.c $(LDLIBS)
 
+kanki-vpn: kanki-vpn.c kanki_vpnc.h kanki.h kanki_link.h kanki_faketcp.h
+	$(CC) $(CFLAGS) -o $@ kanki-vpn.c $(LDLIBS)
+
 # Android (NDK):  make android NDK=/path/to/ndk ABI=arm64-v8a
 # Requires OpenSSL built for Android, or swap to mbedTLS.
 android:
@@ -20,4 +23,4 @@ android:
 		$(CFLAGS) -o kanki-client-android kanki-client.c -lcrypto
 
 clean:
-	rm -f kanki-server kanki-client kanki-vpnd kanki-client-android
+	rm -f kanki-server kanki-client kanki-vpnd kanki-vpn kanki-client-android

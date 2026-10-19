@@ -227,6 +227,14 @@ static int dedup_seen(dedup_t *d, uint64_t seq) {
     return 0;
 }
 
+/* 1 if dedup_seen() would drop seq, without recording it */
+static int __attribute__((unused)) dedup_peek(const dedup_t *d, uint64_t seq) {
+    if (seq > d->top) return 0;
+    if (d->top - seq >= DEDUP_BITS) return 1;
+    uint64_t off = seq % DEDUP_BITS;
+    return (d->bits[off >> 3] >> (off & 7)) & 1;
+}
+
 /* ---------- XOR FEC ----------
    Parity = XOR of every shard as [flags(1) | len(2) | payload], zero-padded
    to the longest; the parity packet's seq field carries the XOR of the shard
@@ -243,7 +251,9 @@ typedef struct {
     uint8_t  flags[MAX_FEC_K + 1];
 } fec_block_t;
 
-#define FEC_CACHE 32
+#ifndef FEC_CACHE
+#define FEC_CACHE 32                 /* blocks kept for recovery (server: fewer, many sessions) */
+#endif
 typedef struct { fec_block_t blk[FEC_CACHE]; uint32_t next_evict; } fec_t;
 
 static void fec_init(fec_t *f) {

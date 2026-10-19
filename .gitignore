@@ -8,3 +8,4 @@ client-android/build/
 client-android/app/build/
 client-android/app/.cxx/
 client-android/local.properties
+server/kanki-vpn
