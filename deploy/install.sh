@@ -2,13 +2,13 @@
 # Installs or upgrades KANKI on a Debian/Ubuntu server: the VPN core (kanki-vpnd),
 # the web panel and an automatic HTTPS certificate for DOMAIN (Caddy + Let's Encrypt).
 # Existing users, keys and configuration are preserved.
-#   sudo bash deploy/install.sh DOMAIN [UDP_PORT]
+#   sudo bash deploy/install.sh [DOMAIN] [UDP_PORT]   (default domain: de3.kankipro.cafe)
 # Optional environment: KANKI_EMAIL (certificate contact), KANKI_CLUSTER=1 (central
 # controller for several nodes, see docs/CLUSTER_FA.md), KANKI_NO_TLS=1 (skip Caddy).
 set -euo pipefail
 usage() { echo 'Usage: sudo bash deploy/install.sh DOMAIN [UDP_PORT]' >&2; exit 2; }
 [[ $EUID -eq 0 ]] || { echo 'Run as root (sudo).' >&2; exit 1; }
-DOMAIN=${1:-}
+DOMAIN=${1:-de3.kankipro.cafe}
 UDP_PORT=${2:-${KANKI_PORT:-4000}}
 [[ $DOMAIN =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]] || usage
 [[ $UDP_PORT =~ ^[0-9]{1,5}$ ]] && (( UDP_PORT >= 1 && UDP_PORT <= 65535 )) || { echo 'UDP_PORT must be 1-65535' >&2; exit 2; }

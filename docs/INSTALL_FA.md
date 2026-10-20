@@ -5,7 +5,7 @@
 پیش‌نیاز: یک VPS با Debian یا Ubuntu، دسترسی root، و یک دامنه (یا زیردامنه) که رکورد A آن به IP همین سرور اشاره کند. اگر از Cloudflare استفاده می‌کنید، رکورد را روی «DNS only» بگذارید (ابر خاکستری)؛ ترافیک UDP تونل از پروکسی Cloudflare عبور نمی‌کند.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kankiturk8770/Testkanki/main/install.sh | sudo bash -s -- vpn.example.com
+curl -fsSL https://raw.githubusercontent.com/kankiturk8770/Testkanki/main/install.sh | sudo bash
 ```
 
 برای انتخاب پورت UDP تونل، آن را آرگومان دوم بدهید (پیش‌فرض 4000):

@@ -7,10 +7,10 @@ VPN اختصاصی IPv4 برای بازی و مسیرهای ناپایدار: AE
 دامنه را به IP سرور وصل کنید (رکورد A) و روی سرور Debian/Ubuntu اجرا کنید:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kankiturk8770/Testkanki/main/install.sh | sudo bash -s -- vpn.example.com
+curl -fsSL https://raw.githubusercontent.com/kankiturk8770/Testkanki/main/install.sh | sudo bash
 ```
 
-هستهٔ VPN، پنل و گواهی SSL خودکار نصب می‌شوند. آرگومان دوم اختیاری، پورت UDP تونل است (پیش‌فرض 4000). در پایان آدرس پنل و توکن مدیریت چاپ می‌شود.
+دامنهٔ پیش‌فرض `de3.kankipro.cafe` است. هستهٔ VPN، پنل و گواهی SSL خودکار نصب می‌شوند. برای دامنه یا پورت دیگر: `... | sudo bash -s -- DOMAIN 9090` (پورت پیش‌فرض 4000). در پایان آدرس پنل و توکن مدیریت چاپ می‌شود.
 
 ## اتصال
 

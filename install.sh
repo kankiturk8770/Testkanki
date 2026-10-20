@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # One-line install from GitHub:
-#   curl -fsSL https://raw.githubusercontent.com/kankiturk8770/Testkanki/main/install.sh | sudo bash -s -- vpn.example.com
-# Optional second argument: VPN UDP port (default 4000). Optional environment:
+#   curl -fsSL https://raw.githubusercontent.com/kankiturk8770/Testkanki/main/install.sh | sudo bash
+# Arguments (optional): DOMAIN (default de3.kankipro.cafe) and VPN UDP port (default 4000),
+# e.g. ... | sudo bash -s -- other.example.com 9090. Optional environment:
 # KANKI_EMAIL, KANKI_REPO, KANKI_BRANCH, KANKI_CLUSTER=1 (see deploy/install.sh).
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo 'Run as root: ... | sudo bash -s -- DOMAIN [UDP_PORT]' >&2; exit 1; }
-[[ -n ${1:-} ]] || { echo 'Usage: ... | sudo bash -s -- DOMAIN [UDP_PORT]' >&2; exit 2; }
+[[ $# -gt 0 ]] || set -- de3.kankipro.cafe
 REPO=${KANKI_REPO:-https://github.com/kankiturk8770/Testkanki.git}
 BRANCH=${KANKI_BRANCH:-main}
 SRC=/opt/kanki/src
