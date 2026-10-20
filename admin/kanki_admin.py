@@ -15,11 +15,13 @@ import threading
 import time
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 DB = Path(os.environ.get('KANKI_ADMIN_DB', './admin.sqlite3'))
 CONF = Path(os.environ.get('KANKI_CONF', './kanki.conf'))
 STATUS = Path(os.environ.get('KANKI_STATUS', './status.txt'))
+EVENTS = Path(os.environ.get('KANKI_EVENTS', str(STATUS.parent / 'events.log')))
+GEOIP = Path(os.environ.get('KANKI_GEOIP', str(STATUS.parent / 'geoip')))
 ADMIN = os.environ.get('KANKI_ADMIN_TOKEN', '')
 BIND = os.environ.get('KANKI_ADMIN_BIND', '127.0.0.1')
 HTTP_PORT = int(os.environ.get('KANKI_ADMIN_PORT', '8765'))
@@ -55,7 +57,9 @@ with sqlite3.connect(DB) as c:
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from kanki_cluster import Controller, ClusterError, APPLY_SECONDS
+from kanki_insight import Monitor, read_status, EVENT_TYPES
 cluster_controller=Controller(DB,enabled=CLUSTER)
+monitor=Monitor(DB,STATUS,EVENTS,GEOIP)
 if CLUSTER: cluster_controller.require_ready()
 
 def query(sql, args=()):
@@ -73,19 +77,7 @@ def expiry(u):
     if not u['expires']: return 0
     return max(1,int(dt.datetime.combine(dt.date.fromisoformat(u['expires']),dt.time(),dt.timezone.utc).timestamp())+86400)
 
-def status():
-    result = {'online':False,'updated':0,'accounts':{},'sessions':[]}
-    try:
-        lines = STATUS.read_text().splitlines()
-        head = lines[0].split()
-        if head[0] != 'KANKI_STATUS_V1': return result
-        result['updated'] = int(head[1]); result['online'] = 0 <= time.time()-int(head[1]) < 5
-        for line in lines[1:]:
-            p = line.split()
-            if p[0] == 'account': result['accounts'][p[1]] = {'rx':int(p[2]),'tx':int(p[3]),'quota':int(p[4])}
-            elif p[0] == 'session': result['sessions'].append({'name':p[1],'account':p[2],'connected':p[3]=='1','ip':p[4],'last_rx':int(p[5])})
-    except (OSError, ValueError, IndexError): pass
-    return result
+def status(): return read_status(STATUS)
 
 def publish():
     begin, end = '# BEGIN KANKI ADMIN USERS', '# END KANKI ADMIN USERS'
@@ -205,6 +197,21 @@ class Handler(BaseHTTPRequestHandler):
                         row['connected']=c.execute('SELECT COUNT(*) FROM node_sessions s JOIN nodes n ON n.id=s.node_id WHERE s.account_id=? AND s.connected=1 AND n.enabled=1 AND n.ready=1 AND n.applied_until>?',(row['cluster_uuid'],now)).fetchone()[0]
             return self.reply(200,result)
         if path=='/api/servers': return self.reply(200,query('SELECT * FROM servers'))
+        if path in ('/api/live','/api/events','/api/history','/api/quality'):
+            q=parse_qs(urlsplit(self.path).query);arg=lambda k:(q.get(k) or [None])[0]
+            try:
+                if path=='/api/live':return self.reply(200,monitor.live()|{'mode':'cluster' if CLUSTER else 'local'})
+                if path=='/api/history':return self.reply(200,monitor.history(min(168,max(0.1,float(arg('hours') or 1)))))
+                if path=='/api/quality':
+                    device=arg('device') or ''
+                    if not re.fullmatch(r'[A-Za-z0-9_-]{1,63}',device):raise ValueError('device')
+                    return self.reply(200,monitor.quality(device,min(48,max(0.1,float(arg('hours') or 1)))))
+                kind=arg('type')
+                if kind and kind not in EVENT_TYPES:raise ValueError('type')
+                before=arg('before')
+                return self.reply(200,monitor.events(limit=min(1000,int(arg('limit') or 300)),device=arg('device'),account=arg('account'),
+                    kind=kind,text=(arg('q') or '')[:80] or None,before=int(before) if before else None))
+            except ValueError:return self.reply(400,{'error':'Invalid query'})
         if path=='/api/audit': return self.reply(200,query('SELECT * FROM audit ORDER BY id DESC LIMIT 100'))
         return self.reply(404,{'error':'Not found'})
     def mutate(self, method):
@@ -312,5 +319,6 @@ def reconcile():
 if __name__=='__main__':
     with lock: publish()
     threading.Thread(target=reconcile,daemon=True).start()
+    monitor.start()
     print(f'KANKI panel: {BIND}:{HTTP_PORT}',flush=True)
     ThreadingHTTPServer((BIND,HTTP_PORT),Handler).serve_forever()

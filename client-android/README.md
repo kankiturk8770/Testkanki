@@ -1,4 +1,4 @@
-# KANKI Android 0.4.1
+# KANKI Android 0.5.0
 
 Android 8+ ARM64, compile/target SDK 34, JDK 17, NDK 26.3.11579264. Build OpenSSL for Android with `build-openssl.sh PREFIX arm64-v8a`, then `./gradlew assembleDebug assembleDebugAndroidTest lintDebug -POPENSSL_ROOT=PREFIX`.
 

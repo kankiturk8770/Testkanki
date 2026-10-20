@@ -80,5 +80,39 @@ int main(void){
     assert(load_conf(1,again,&count)<0); // duplicate listener rejected, old table kept
     assert(nports==1&&ports[0].port==47103);
     close(ports[0].fd);unlink(conf);apply_users(NULL,0);
-    puts("VPN datapath integration: PASS (encrypted IPv4 both ways, replay, roaming, spoofing, MTU, shared quota, expiry, reload, persistence, live listeners)");
+    {   // Mobile CGNAT moves the flow to a new public port: follow it at once.
+        char ev[]="/tmp/kanki-events-test-XXXXXX";int ef=mkstemp(ev);assert(ef>=0);close(ef);events_path=ev;
+        vuser *mob[1]={new_user("mob-d1",11,"10.66.0.6","mob",0)};apply_users(mob,1);vuser *m=users[0];
+        int t2[2];assert(!socketpair(AF_UNIX,SOCK_DGRAM,0,t2));
+        vport mp={.port=4002,.repeat=4,.fec_k=8,.fec_on=1,.fd=socket(AF_INET,SOCK_DGRAM,0)};
+        kanki_link *cl=calloc(1,sizeof *cl);link_init(cl,m->psk,4,8,1);cl->cfg.jitter_us=0;
+        uint8_t pl[28],w[KANKI_MAX_PKT],g[64];uint32_t d2;inet_pton(AF_INET,"8.8.8.8",&d2);ip_packet(pl,m->ip,d2);
+        struct sockaddr_in a1={.sin_family=AF_INET,.sin_port=htons(40001),.sin_addr.s_addr=htonl(INADDR_LOOPBACK)},a2=a1;a2.sin_port=htons(40002);
+        uint8_t hello[]="KANKI-HELLO";int wl=kanki_seal2(&cl->cfg,FLAG_CONTROL,cl->cfg.tx_seq++,0,0,8,hello,11,w);
+        port_in(&mp,t2[0],w,wl,&a1,0);assert(m->bound&&m->addr.sin_port==a1.sin_port&&m->q->roams==0);
+        for(int i=0;i<3;i++){wl=kanki_seal2(&cl->cfg,FLAG_DATA,cl->cfg.tx_seq++,9,(uint8_t)i,8,pl,28,w);port_in(&mp,t2[0],w,wl,&a1,0);assert(recv(t2[1],g,sizeof g,MSG_DONTWAIT)==28);}
+        int old_len=wl;uint8_t old[KANKI_MAX_PKT];memcpy(old,w,wl);
+        cl->cfg.tx_seq++;                                   // one packet never arrives: lost
+        wl=kanki_seal2(&cl->cfg,FLAG_DATA,cl->cfg.tx_seq++,10,0,8,pl,28,w);
+        port_in(&mp,t2[0],w,wl,&a2,0);                      // fresh packet, new port, no waiting
+        assert(m->addr.sin_port==a2.sin_port&&m->q->roams==1);assert(recv(t2[1],g,sizeof g,MSG_DONTWAIT)==28);
+        port_in(&mp,t2[0],old,old_len,&a1,0);assert(m->addr.sin_port==a2.sin_port); // replay cannot move it back
+        uint8_t par[KANKI_MAX_PKT];int pw=kanki_seal2(&cl->cfg,FLAG_PARITY,UINT64_MAX-5,11,FEC_PARITY_IDX,1,pl,28,par);
+        port_in(&mp,t2[0],par,pw,&a1,0);assert(m->addr.sin_port==a2.sin_port);       // parity never moves it
+        uint8_t st[]="STAT:v1 rtt=37 loss=125 lost=2 rec=5 hops=1";
+        wl=kanki_seal2(&cl->cfg,FLAG_CONTROL,cl->cfg.tx_seq++,0,0,8,st,sizeof st-1,w);port_in(&mp,t2[0],w,wl,&a2,0);
+        assert(m->q->c_rtt==37&&m->q->c_loss_pm==125&&m->q->c_lost==2&&m->q->c_rec==5&&m->q->c_tlost==2);
+        m->q->win_at=0;q_roll(m,time(NULL));
+        assert(m->q->total.unique==6&&m->q->total.lost==1&&m->q->win.lost==1);           // hello, 3 data, data, stat
+        assert(m->q->total.copies==6&&m->q->total.expected==10+3*4+4+10);               // single copies of 10x/4x packets
+        status_path="/tmp/kanki-status-q";save_status();
+        FILE *sf=fopen(status_path,"r");char line[1024];int found=0;
+        while(fgets(line,sizeof line,sf))if(!strncmp(line,"session mob-d1 ",15)){found=1;assert(strstr(line," 127.0.0.1:40002 "));}
+        fclose(sf);unlink(status_path);status_path=NULL;assert(found);
+        FILE *ef2=fopen(ev,"r");char all[8192]={0};size_t got=fread(all,1,sizeof all-1,ef2);fclose(ef2);(void)got;
+        assert(strstr(all," mob-d1 mob connect from=127.0.0.1:40001"));assert(strstr(all," mob-d1 mob roam from=127.0.0.1:40001 to=127.0.0.1:40002"));
+        assert(strstr(all," mob-d1 mob quality "));
+        unlink(ev);events_path=NULL;close(mp.fd);close(t2[0]);close(t2[1]);free(cl);apply_users(NULL,0);
+    }
+    puts("VPN datapath integration: PASS (encrypted IPv4 both ways, replay, roaming, spoofing, MTU, shared quota, expiry, reload, persistence, live listeners, instant roaming, quality, events)");
 }

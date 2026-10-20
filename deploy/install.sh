@@ -58,7 +58,7 @@ install -d -m 0755 /opt/kanki/admin /opt/kanki/deploy
 install -m 0755 "$ROOT/server/kanki-vpnd" /usr/local/bin/
 # Earlier releases installed separate relay/client programs; they are no longer used.
 rm -f /usr/local/bin/kanki-server /usr/local/bin/kanki-client /usr/local/bin/kanki-vpn-client
-install -m 0644 "$ROOT/admin/kanki_admin.py" "$ROOT/admin/kanki_cluster.py" "$ROOT/admin/index.html" "$ROOT/admin/app.js" "$ROOT/admin/style.css" /opt/kanki/admin/
+install -m 0644 "$ROOT/admin/kanki_admin.py" "$ROOT/admin/kanki_cluster.py" "$ROOT/admin/kanki_insight.py" "$ROOT/admin/index.html" "$ROOT/admin/app.js" "$ROOT/admin/style.css" /opt/kanki/admin/
 install -m 0755 "$ROOT/deploy/gateway.sh" "$ROOT/deploy/wait-gateway.sh" /opt/kanki/deploy/
 if [[ ! -e /etc/kanki/kanki.conf ]]; then
   sed "s/^port udp 4000 /port udp $UDP_PORT /" "$ROOT/deploy/kanki.conf.example" > /etc/kanki/kanki.conf

@@ -1,10 +1,112 @@
-<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KANKI · مرکز مدیریت</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head><body>
-<aside><a class="brand" href="/">◈ <b>KANKI</b><small>NETWORK CONTROL</small></a><div class="nav"><button data-tab="overview" class="selected">◉ نمای کلی</button><button data-tab="users">♙ کاربران و اشتراک‌ها</button><button data-tab="servers">▤ پروفایل سرورها</button><button data-tab="audit">≡ رویدادها</button></div><div class="aside-note">هسته اختصاصی KANKI<br><span>IPv4 · UDP · FEC · Repeat</span></div></aside>
-<main><header><div><div class="eyebrow">KANKI / CONTROL CENTER</div><h1 id="page-title">وضعیت شبکه</h1><p>مدیریت اتصال‌ها، ترافیک و اشتراک‌های اختصاصی</p></div><button id="logout" class="secondary">خروج</button></header>
-<div id="message" role="status"></div><section id="login" class="card"><span class="eyebrow">SECURE ACCESS</span><h2>ورود به مرکز مدیریت</h2><p>توکن مدیریت را وارد کنید. توکن فقط در حافظهٔ همین صفحه نگهداری می‌شود.</p><form id="login-form"><input id="admin-token" type="password" autocomplete="off" placeholder="توکن مدیریت" required><button>ورود امن ←</button></form></section>
-<div id="dashboard" hidden><section id="overview" class="tab"><div class="metrics"><article class="card"><small>وضعیت هسته</small><strong id="core-state">—</strong><span>بر اساس آخرین heartbeat</span></article><article class="card"><small>کاربران فعال</small><strong id="active-users">0</strong><span id="all-users">از ۰ کاربر</span></article><article class="card"><small>دستگاه‌های متصل</small><strong id="online-users">0</strong><span>هر دستگاه یک آدرس مستقل</span></article><article class="card"><small>ترافیک کل</small><strong id="total-traffic">0 B</strong><span>مجموع ارسال و دریافت IP</span></article></div><div class="two"><article class="card"><div class="eyebrow">TRAFFIC DISTRIBUTION</div><h2>مصرف کاربران</h2><div id="traffic-bars"></div></article><article class="card"><div class="eyebrow">TRANSPORT ENGINE</div><h2>برای مسیرهای ناپایدار</h2><p>رمزنگاری AES-256-GCM، تکرار بسته‌ها و بازیابی XOR FEC در هستهٔ اختصاصی انجام می‌شوند.</p><div class="tags"><span>FEC recovery</span><span>Adaptive repeat</span><span>MTU 1280</span></div><p class="muted">پینگ بازی به مسیر اینترنت و موقعیت سرور وابسته است. آمار این صفحه شامل RTT بازی نیست.</p></article></div></section>
-<section id="users" class="tab" hidden><article class="card"><h2>اشتراک جدید</h2><form id="user-form" class="form-grid"><label>نام کاربر<input name="name" placeholder="player_01" pattern="[a-zA-Z0-9_-]{1,24}" maxlength="24" required></label><label>حجم (GiB؛ صفر نامحدود)<input name="quota" type="number" value="0" min="0" step="0.1" required></label><label>انقضا (UTC)<input name="expires" type="date"></label><label>تعداد دستگاه<input name="connections" type="number" value="1" min="1" max="8" required></label><button>ایجاد اشتراک +</button></form></article><article class="card"><div class="table-head"><h2>کاربران</h2><input id="search" placeholder="جستجوی نام…"></div><div class="table-wrap"><table><thead><tr><th>کاربر</th><th>وضعیت</th><th>مصرف / حجم</th><th>دستگاه</th><th>انقضا</th><th>عملیات</th></tr></thead><tbody id="user-rows"></tbody></table></div></article></section>
-<section id="servers" class="tab" hidden><article class="card"><h2 id="server-heading">پروفایل اتصال جدید</h2><p id="server-help">هر پروفایل یک پورت UDP روی هستهٔ همین سرور است؛ همان پورت در لینک اشتراک قرار می‌گیرد.</p><form id="server-form" class="form-grid"><label>نام<input name="name" required></label><label>دامنه یا IPv4<input name="host" required></label><label>پورت UDP<input name="port" type="number" value="4000" min="1" max="65535" required></label><label>Repeat<input name="repeat" type="number" value="4" min="3" max="10" required></label><label>FEC k<input name="fec_k" type="number" value="8" min="2" max="16" required></label><label>Jitter µs<input name="jitter" type="number" value="0" min="0" max="100000" required></label><label>MTU<input name="mtu" type="number" value="1280" min="576" max="1400" required></label><label>DNS IPv4<input name="dns" value="1.1.1.1" required></label><button>افزودن پروفایل</button></form></article><div id="server-cards" class="two"></div></section>
-<section id="audit" class="tab" hidden><article class="card"><h2>تاریخچه عملیات مدیریت</h2><div id="audit-list"></div></article></section></div>
-<footer>◈ KANKI <span>شبکه را دقیق‌تر مدیریت کنید.</span><span id="updated"></span></footer></main>
-<dialog id="node-credential"><h2>اعتبار اتصال نود</h2><p>توکن فقط همین‌بار نمایش داده می‌شود. آن را در فایل خصوصی ذخیره و از ورودی نصب‌کنندهٔ نود وارد کنید.</p><textarea id="node-token" readonly rows="3" spellcheck="false" dir="ltr"></textarea><p dir="ltr"><code>sudo bash deploy/install-node.sh https://PANEL &lt; token.txt</code></p><button id="close-credential">ذخیره کردم؛ بستن</button></dialog><dialog id="device-dialog"><h2 id="device-heading">تخصیص دستگاه‌ها</h2><p>هر دستگاه روی یک نود فعال است. انتقال به نود دیگر پس از پایان مجوز قبلی انجام می‌شود.</p><div id="device-rows"></div><button id="close-devices" class="secondary">بستن</button></dialog><dialog id="edit-dialog"><form id="edit-form"><h2>ویرایش اشتراک <span id="edit-name"></span></h2><label>حجم GiB<input id="edit-quota" type="number" min="0" step="0.01" required></label><label>انقضا<input id="edit-expires" type="date"></label><label>دستگاه‌ها<input id="edit-connections" type="number" min="1" max="8" required></label><p class="muted">کاهش تعداد دستگاه‌ها، کلیدهای دستگاه‌های حذف‌شده را باطل می‌کند.</p><button>ذخیره</button><button type="button" id="cancel-edit" class="secondary">انصراف</button></form></dialog></body></html>
+<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KANKI · مرکز کنترل</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body class="locked">
+<aside class="glass">
+  <a class="brand" href="/"><span class="logo">K</span><span><b>KANKI</b><small>CONTROL CENTER</small></span></a>
+  <div class="nav">
+    <button data-tab="overview" class="selected"><span class="ico">◉</span>داشبورد</button>
+    <button data-tab="live"><span class="ico">⚡</span>اتصال‌های زنده<span class="count" id="live-count">0</span></button>
+    <button data-tab="users"><span class="ico">♙</span>کاربران و اشتراک‌ها</button>
+    <button data-tab="logs"><span class="ico">≣</span>لاگ اتصال‌ها</button>
+    <button data-tab="servers"><span class="ico">▤</span>پورت‌ها و پروفایل‌ها</button>
+    <button data-tab="audit"><span class="ico">✎</span>تاریخچهٔ مدیریت</button>
+  </div>
+  <div class="aside-foot"><b>هستهٔ KANKI</b><br>AES-256-GCM · Repeat · XOR FEC<br><span id="side-uptime">—</span></div>
+</aside>
+<main>
+  <header>
+    <div><div class="eyebrow" id="page-eyebrow">KANKI / OVERVIEW</div><h1 id="page-title">داشبورد</h1></div>
+    <div class="header-actions"><span class="pill" id="engine-pill"><span class="dot"></span><span id="core-state">—</span></span><span class="pill" id="updated">—</span><button id="logout" class="btn secondary small">خروج</button></div>
+  </header>
+  <div id="message" role="status"></div>
+
+  <section id="login" class="glass">
+    <div class="logo">K</div>
+    <h2>ورود به مرکز کنترل KANKI</h2>
+    <p class="muted">توکن مدیریت را وارد کنید. توکن فقط در حافظهٔ همین صفحه نگهداری می‌شود.</p>
+    <form id="login-form"><input id="admin-token" type="password" autocomplete="off" placeholder="توکن مدیریت" required dir="ltr"><button class="btn">ورود امن ←</button></form>
+  </section>
+
+  <div id="dashboard" hidden>
+    <!-- overview -->
+    <section id="overview" class="tab">
+      <div class="grid metrics">
+        <article class="glass metric green"><small>دستگاه‌های متصل</small><strong id="online-users">0</strong><span id="online-sub">همین حالا</span></article>
+        <article class="glass metric"><small>کاربران فعال</small><strong id="active-users">0</strong><span id="all-users">از ۰ کاربر</span></article>
+        <article class="glass metric cyan"><small>ترافیک لحظه‌ای ↓ / ↑</small><strong id="rate-now">0 / 0</strong><span>کل کاربران، بیت بر ثانیه</span></article>
+        <article class="glass metric pink"><small>ترافیک کل</small><strong id="total-traffic">0 B</strong><span>مجموع حجم مصرفی کاربران</span></article>
+      </div>
+      <div class="two">
+        <article class="glass card">
+          <div class="card-head"><div><h2>ترافیک و دستگاه‌های آنلاین</h2><p class="sub">پهنای باند تونل (Mbps) و تعداد دستگاه‌های متصل</p></div>
+            <div class="seg" id="range-seg"><button data-h="1" class="on">۱ ساعت</button><button data-h="24">۲۴ ساعت</button><button data-h="168">۷ روز</button></div></div>
+          <div class="chart-wrap"><canvas id="traffic-chart"></canvas><div class="chart-tip"></div></div>
+        </article>
+        <article class="glass card">
+          <h2>سلامت سرور</h2><p class="sub" id="host-sub">—</p>
+          <div class="bars" id="host-bars"></div>
+          <div class="kv" id="host-kv"></div>
+        </article>
+      </div>
+      <div class="halves">
+        <article class="glass card"><div class="card-head"><div><h2>کیفیت اتصال‌ها</h2><p class="sub">Loss مسیر و بسته‌های از دست رفته در ۱۰ ثانیهٔ اخیر</p></div></div><div id="quality-list"></div></article>
+        <article class="glass card"><div class="card-head"><div><h2>آخرین رویدادها</h2><p class="sub">اتصال، تغییر پورت، قطعی و افت کیفیت</p></div><button class="btn secondary small" data-goto="logs">همه</button></div><div class="events" id="recent-events"></div></article>
+      </div>
+      <article class="glass card"><h2>بیشترین مصرف</h2><p class="sub">۶ کاربر پرمصرف</p><div class="bars" id="traffic-bars"></div></article>
+    </section>
+
+    <!-- live -->
+    <section id="live" class="tab" hidden>
+      <article class="glass card">
+        <div class="table-head"><div><h2>اتصال‌های زنده</h2><p class="sub">هر ۲ ثانیه به‌روز می‌شود · روی هر ردیف بزنید تا جزئیات و نمودار کیفیت را ببینید</p></div><input id="live-search" placeholder="جستجوی کاربر، IP یا اپراتور…"></div>
+        <div class="table-wrap"><table><thead><tr><th>کاربر / دستگاه</th><th>موقعیت و اپراتور</th><th>IP عمومی : پورت گوشی</th><th>مدت اتصال</th><th>↓ / ↑ لحظه‌ای</th><th>پینگ</th><th>Loss ↓ / ↑</th><th>نجات FEC / از دست رفته</th><th>تغییر پورت</th></tr></thead><tbody id="live-rows"></tbody></table></div>
+        <p class="dim" id="geo-note"></p>
+      </article>
+    </section>
+
+    <!-- users -->
+    <section id="users" class="tab" hidden>
+      <article class="glass card"><h2>اشتراک جدید</h2><p class="sub">حجم صفر یعنی نامحدود. هر دستگاه کلید و IP جدا دارد.</p>
+        <form id="user-form" class="form-grid"><label>نام کاربر<input name="name" placeholder="player_01" pattern="[a-zA-Z0-9_-]{1,24}" maxlength="24" required dir="ltr"></label><label>حجم (GiB)<input name="quota" type="number" value="0" min="0" step="0.1" required></label><label>انقضا (UTC)<input name="expires" type="date"></label><label>تعداد دستگاه<input name="connections" type="number" value="1" min="1" max="8" required></label><button class="btn">ایجاد اشتراک +</button></form></article>
+      <article class="glass card">
+        <div class="table-head"><h2>کاربران</h2><input id="search" placeholder="جستجوی نام…"></div>
+        <div class="table-wrap"><table><thead><tr><th>کاربر</th><th>وضعیت</th><th>مصرف / حجم</th><th>دستگاه</th><th>انقضا</th><th>عملیات</th></tr></thead><tbody id="user-rows"></tbody></table></div>
+      </article>
+    </section>
+
+    <!-- logs -->
+    <section id="logs" class="tab" hidden>
+      <article class="glass card">
+        <div class="card-head"><div><h2>لاگ اتصال‌ها</h2><p class="sub">همهٔ اتصال‌ها، تغییر پورت توسط اپراتور، قطعی، افت کیفیت، اتمام حجم و انقضا</p></div><button class="btn secondary small" id="log-refresh">به‌روزرسانی</button></div>
+        <div class="filters">
+          <select id="log-type"><option value="">همهٔ رویدادها</option><option value="connect">اتصال</option><option value="roam">تغییر پورت / مسیر</option><option value="quality">افت کیفیت / Loss</option><option value="disconnect">قطع توسط کاربر</option><option value="idle">بی‌فعالیت</option><option value="quota">اتمام حجم</option><option value="expired">انقضا / غیرفعال</option><option value="allowed">مجاز شد</option></select>
+          <select id="log-account"><option value="">همهٔ کاربران</option></select>
+          <input id="log-search" placeholder="جستجو در متن، IP یا پورت…">
+        </div>
+        <div class="events" id="log-rows"></div>
+        <div class="dialog-actions"><button class="btn secondary small" id="log-more">قدیمی‌تر</button></div>
+      </article>
+    </section>
+
+    <!-- servers -->
+    <section id="servers" class="tab" hidden>
+      <article class="glass card"><h2 id="server-heading">پروفایل اتصال جدید</h2><p class="sub" id="server-help">هر پروفایل یک پورت UDP روی هستهٔ همین سرور است؛ همان پورت در لینک اشتراک قرار می‌گیرد.</p>
+        <form id="server-form" class="form-grid"><label>نام<input name="name" required></label><label>دامنه یا IPv4<input name="host" required dir="ltr"></label><label>پورت UDP<input name="port" type="number" value="4000" min="1" max="65535" required></label><label>Repeat<input name="repeat" type="number" value="4" min="3" max="10" required></label><label>FEC k<input name="fec_k" type="number" value="8" min="2" max="16" required></label><label>Jitter µs<input name="jitter" type="number" value="0" min="0" max="100000" required></label><label>MTU<input name="mtu" type="number" value="1280" min="576" max="1400" required></label><label>DNS IPv4<input name="dns" value="1.1.1.1" required dir="ltr"></label><button class="btn">افزودن پروفایل</button></form></article>
+      <div id="server-cards" class="grid metrics"></div>
+    </section>
+
+    <!-- audit -->
+    <section id="audit" class="tab" hidden><article class="glass card"><h2>تاریخچهٔ عملیات مدیریت</h2><p class="sub">۱۰۰ عملیات اخیر در پنل</p><div class="events" id="audit-list"></div></article></section>
+  </div>
+  <footer>◈ KANKI <span>مرکز کنترل تونل بازی</span><span id="geo-credit"><a href="https://db-ip.com" rel="noreferrer noopener" target="_blank">IP Geolocation by DB-IP</a></span></footer>
+</main>
+
+<dialog id="node-credential"><h2>اعتبار اتصال نود</h2><p>توکن فقط همین‌بار نمایش داده می‌شود. آن را در فایل خصوصی ذخیره و از ورودی نصب‌کنندهٔ نود وارد کنید.</p><textarea id="node-token" readonly rows="3" spellcheck="false"></textarea><p dir="ltr"><code>sudo bash deploy/install-node.sh https://PANEL &lt; token.txt</code></p><button id="close-credential" class="btn">ذخیره کردم؛ بستن</button></dialog>
+<dialog id="device-dialog"><h2 id="device-heading">تخصیص دستگاه‌ها</h2><p class="muted">هر دستگاه روی یک نود فعال است. انتقال به نود دیگر پس از پایان مجوز قبلی انجام می‌شود.</p><div id="device-rows" class="grid"></div><div class="dialog-actions"><button id="close-devices" class="btn secondary">بستن</button></div></dialog>
+<dialog id="edit-dialog"><form id="edit-form"><h2>ویرایش اشتراک <span id="edit-name" class="ltr"></span></h2><label>حجم GiB<input id="edit-quota" type="number" min="0" step="0.01" required></label><label>انقضا<input id="edit-expires" type="date"></label><label>دستگاه‌ها<input id="edit-connections" type="number" min="1" max="8" required></label><p class="muted">کاهش تعداد دستگاه‌ها، کلید دستگاه‌های حذف‌شده را باطل می‌کند.</p><div class="dialog-actions"><button class="btn">ذخیره</button><button type="button" id="cancel-edit" class="btn secondary">انصراف</button></div></form></dialog>
+<dialog id="detail-dialog"><div class="card-head"><div><div class="eyebrow">DEVICE / USER</div><h2 id="detail-title"></h2></div><button id="close-detail" class="btn secondary small">بستن</button></div>
+  <div class="kv" id="detail-kv"></div>
+  <div class="card-head"><h3>کیفیت اتصال</h3><div class="seg" id="detail-seg"><button data-h="1" class="on">۱ ساعت</button><button data-h="6">۶ ساعت</button><button data-h="24">۲۴ ساعت</button></div></div>
+  <div class="chart-wrap small"><canvas id="detail-chart"></canvas><div class="chart-tip"></div></div>
+  <h3>رویدادها</h3><div class="events" id="detail-events"></div>
+</dialog>
+</body></html>

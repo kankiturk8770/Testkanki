@@ -47,7 +47,7 @@ After=kanki-agent.service
 Wants=kanki-agent.service
 [Service]
 ExecStart=
-ExecStart=/usr/local/bin/kanki-vpnd --config /etc/kanki/kanki.conf --status-file /var/lib/kanki/status.txt --credit-ledger /var/lib/kanki/credit.log
+ExecStart=/usr/local/bin/kanki-vpnd --config /etc/kanki/kanki.conf --status-file /var/lib/kanki/status.txt --events-file /var/lib/kanki/events.log --credit-ledger /var/lib/kanki/credit.log
 EOF
 systemctl daemon-reload
 if [[ ${2:-} == --resume ]]; then systemctl stop kanki-agent.service; fi

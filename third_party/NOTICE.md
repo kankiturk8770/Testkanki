@@ -6,3 +6,9 @@
 - Linux binaries dynamically depend on the host GNU C Library; it is not bundled. Android system libraries are not bundled.
 
 The project itself has no newly assigned license; the original project owner's licensing decisions are preserved.
+
+## DB-IP Lite (panel IP location)
+
+The panel downloads the free DB-IP Lite country and ASN databases at runtime to show
+each connection's country and operator. They are licensed under CC BY 4.0;
+"IP Geolocation by DB-IP" (https://db-ip.com) is shown in the panel footer.

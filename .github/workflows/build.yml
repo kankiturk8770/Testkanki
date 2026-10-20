@@ -7,11 +7,13 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libssl-dev openssl iproute2 iptables
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev openssl iproute2 iptables conntrack iputils-ping
       - name: Regression and API tests
         run: bash tests/run.sh
       - name: Real isolated TUN, NAT, DNS and loss tests
         run: sudo bash tests/linux_netns.sh
+      - name: Mobile CGNAT port remap and blackholed flow (app native code vs real server)
+        run: sudo bash tests/cgnat_roaming.sh
       - name: Real HTTPS cluster, two agents, TUN quota and crash test
         run: sudo python3 tests/cluster_netns.py
       - name: Build portable x86_64 artifacts with static libcrypto

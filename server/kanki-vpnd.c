@@ -22,11 +22,14 @@
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <inttypes.h>
+#include <stdarg.h>
 
 #define MAX_PORTS      8
 #define MAX_USERS      4096
 #define SESSION_IDLE_S 300        /* unbind a user after 5 min of silence */
-#define PING_SEEN      16
+#define QUAL_WINDOW_S  10         /* connection-quality window */
+#define QUAL_REPORT_S  5          /* QUAL message to the client */
+#define EVENTS_MAX     (4 << 20)  /* events log rotates at 4 MiB */
 
 typedef struct {
     int      faketcp;
@@ -49,6 +52,25 @@ static account *account_get(const char *name) {
     account *a=&accounts[naccounts++]; memset(a,0,sizeof *a); snprintf(a->name,sizeof a->name,"%s",name); return a;
 }
 
+/* Connection quality of one device. Uplink (client -> server) is measured
+   here; downlink is measured by the client and reported in STAT messages.
+   Every logical packet carries a sequence number, so a packet is "lost" when
+   neither a copy nor FEC recovery delivered it. */
+typedef struct { uint64_t copies, expected, unique, recovered, lost; } qcount;
+typedef struct {
+    dedup_t  seen;                /* logical packets delivered (direct or FEC) */
+    uint64_t first_seq, max_seq, got, lost_base;
+    qcount   total, snap, win;    /* totals, totals at last window edge, last window */
+    time_t   win_at, since, last_loss_event, qual_at;
+    uint32_t roams;
+    uint64_t rx_bytes, tx_bytes;  /* payload bytes to / from this device */
+    /* reported by the client for the downlink (server -> client) */
+    int      c_rtt;
+    uint32_t c_loss_pm, c_hops;
+    uint64_t c_lost, c_rec, c_tlost, c_trec;
+    time_t   c_at;
+} qstat;
+
 typedef struct {
     char        name[64];
     char        group[64];
@@ -63,8 +85,8 @@ typedef struct {
     struct sockaddr_in addr;
     ftcp_t      ft;               /* fake-TCP send state towards this user */
     time_t      last_rx;
-    uint64_t    ping_seen[PING_SEEN];
-    int         ping_pos;
+    qstat      *q;                /* allocated with the links */
+    int         limit_state;      /* 0 ok, 1 expired/disabled, 2 quota: logged on change */
 } vuser;
 
 static volatile sig_atomic_t running = 1, reload = 0;
@@ -205,7 +227,7 @@ static int load_conf(int users_only, vuser **out, int *nout) {
 
 static void user_free(vuser *u) {
     if (!u) return;
-    free(u->up); free(u->down); free(u);
+    free(u->up); free(u->down); free(u->q); free(u);
 }
 
 /* (re)build users[] keeping live sessions of users whose key did not change */
@@ -241,6 +263,101 @@ static void apply_users(vuser **nu, int n) {
     }
     nusers = n;
     fprintf(stderr, "[kanki] %d user(s) loaded\n", nusers);
+}
+
+/* ---------- events log ---------- */
+
+static const char *events_path = NULL;
+
+/* One line per event: "UNIX_TIME DEVICE ACCOUNT TYPE key=value ...". The panel
+   reads it; the same text also goes to the journal. */
+static void event_log(const vuser *u, const char *type, const char *fmt, ...) {
+    char detail[512] = "";
+    if (fmt) { va_list ap; va_start(ap, fmt); vsnprintf(detail, sizeof detail, fmt, ap); va_end(ap); }
+    fprintf(stderr, "[kanki] %s %s %s\n", u ? u->name : "-", type, detail);
+    if (!events_path) return;
+    struct stat st;
+    if (!stat(events_path, &st) && st.st_size > EVENTS_MAX) {
+        char old[4096];
+        if (snprintf(old, sizeof old, "%s.1", events_path) < (int)sizeof old) rename(events_path, old);
+    }
+    int fd = open(events_path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0640);
+    if (fd < 0) return;
+    char line[700];
+    int n = snprintf(line, sizeof line, "%lld %s %s %s %s\n", (long long)time(NULL),
+                     u ? u->name : "-", u ? u->group : "-", type, detail);
+    if (n > 0) { ssize_t w = write(fd, line, (size_t)(n < (int)sizeof line ? n : (int)sizeof line - 1)); (void)w; }
+    close(fd);
+}
+
+static const char *endpoint_str(const struct sockaddr_in *a, char *buf, size_t n) {
+    char ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &a->sin_addr, ip, sizeof ip);
+    snprintf(buf, n, "%s:%d", ip, ntohs(a->sin_port));
+    return buf;
+}
+
+/* ---------- connection quality ---------- */
+
+static uint64_t q_stream_lost(const qstat *q) {
+    if (!q->first_seq) return 0;
+    uint64_t span = q->max_seq - q->first_seq + 1;
+    return span > q->got ? span - q->got : 0;
+}
+
+/* 1 when seq is delivered for the first time. A new client session starts a
+   new sequence space, so a far jump starts a new stream. */
+static int q_first(qstat *q, uint64_t seq) {
+    if (!q->first_seq || seq > q->max_seq + 1000000u || seq + DEDUP_BITS < q->first_seq) {
+        q->lost_base += q_stream_lost(q);
+        dedup_init(&q->seen);
+        q->first_seq = q->max_seq = seq; q->got = 0;
+    }
+    if (dedup_seen(&q->seen, seq)) return 0;
+    if (seq < q->first_seq) q->first_seq = seq;
+    if (seq > q->max_seq) q->max_seq = seq;
+    q->got++;
+    return 1;
+}
+
+static void q_copy(qstat *q, const kanki_pkt *k, int sender_repeat) {
+    if (k->fec_idx == FEC_PARITY_IDX) return;
+    q->total.copies++;
+    if (q_first(q, k->seq)) {
+        q->total.unique++;
+        q->total.expected += (k->flags & (FLAG_CONTROL | FLAG_TAIL)) ? MAX_REPEAT : sender_repeat;
+    }
+}
+
+static void q_recovered(qstat *q, const kanki_pkt *k, int sender_repeat) {
+    if (q_first(q, k->seq)) { q->total.recovered++; q->total.expected += sender_repeat; }
+}
+
+static uint32_t q_loss_pm(const qcount *c) {
+    if (!c->expected || c->copies >= c->expected) return 0;
+    return (uint32_t)(1000 - c->copies * 1000 / c->expected);
+}
+
+/* close the current window; log a quality event when packets were lost */
+static void q_roll(vuser *u, time_t now) {
+    qstat *q = u->q;
+    if (!q || now - q->win_at < QUAL_WINDOW_S) return;
+    q->total.lost = q->lost_base + q_stream_lost(q);
+    qcount w = { q->total.copies - q->snap.copies, q->total.expected - q->snap.expected,
+                 q->total.unique - q->snap.unique, q->total.recovered - q->snap.recovered,
+                 q->total.lost > q->snap.lost ? q->total.lost - q->snap.lost : 0 };
+    q->win = w; q->snap = q->total; q->win_at = now;
+    uint32_t pm = q_loss_pm(&w);
+    int client_fresh = now - q->c_at <= 2 * QUAL_REPORT_S;
+    if (u->bound && (w.lost || pm >= 200 || (client_fresh && (q->c_lost || q->c_loss_pm >= 200))) &&
+        now - q->last_loss_event >= 30) {
+        q->last_loss_event = now;
+        event_log(u, "quality", "up_loss=%u.%u%% up_lost=%" PRIu64 " up_fec=%" PRIu64
+                  " down_loss=%u.%u%% down_lost=%" PRIu64 " down_fec=%" PRIu64 " rtt=%d repeat=%d",
+                  pm / 10, pm % 10, w.lost, w.recovered, q->c_loss_pm / 10, q->c_loss_pm % 10,
+                  client_fresh ? q->c_lost : 0, client_fresh ? q->c_rec : 0, q->c_rtt,
+                  u->down ? u->down->cfg.repeat : 0);
+    }
 }
 
 /* Accounting is payload bytes (both directions), shared by all device slots.
@@ -290,7 +407,19 @@ static void save_status(void) {
     for(int i=0;i<nusers;i++) {
         vuser *u=users[i];char ip[INET_ADDRSTRLEN];inet_ntop(AF_INET,&u->ip,ip,sizeof ip);
         uint64_t top=u->up?u->up->dedup.top:u->replay_floor;
-        fprintf(f,"session %s %s %d %s %lld %" PRIu64 "\n",u->name,u->group,u->bound && within_quota(u),ip,(long long)u->last_rx,top);
+        /* fields 1-6 are read by older panels/agents; quality fields follow */
+        fprintf(f,"session %s %s %d %s %lld %" PRIu64,u->name,u->group,u->bound && within_quota(u),ip,(long long)u->last_rx,top);
+        qstat *q=u->q;
+        if(q){
+            char ep[64];if(u->bound)endpoint_str(&u->addr,ep,sizeof ep);else snprintf(ep,sizeof ep,"-");
+            int fresh=time(NULL)-q->c_at<=2*QUAL_REPORT_S;
+            fprintf(f," %s %lld %u %u %" PRIu64 " %" PRIu64 " %u %" PRIu64 " %" PRIu64 " %d %d %" PRIu64 " %" PRIu64 " %u %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64,
+                ep,(long long)q->since,q->roams,q_loss_pm(&q->win),q->win.lost,q->win.recovered,
+                fresh?q->c_loss_pm:0,fresh?q->c_lost:0,fresh?q->c_rec:0,fresh?q->c_rtt:-1,
+                u->down?u->down->cfg.repeat:0,q->rx_bytes,q->tx_bytes,q->c_hops,
+                q->total.lost,q->total.recovered,q->c_tlost,q->c_trec);
+        }
+        fputc('\n',f);
     }
     int failed=fflush(f);if(!failed)failed=fsync(fd);if(fclose(f))failed=1;
     if(!failed)rename(tmp,status_path);else unlink(tmp);
@@ -398,7 +527,11 @@ static int user_links(vuser *u) {
     if (u->up) return 0;
     u->up = calloc(1, sizeof *u->up);
     u->down = calloc(1, sizeof *u->down);
-    if (!u->up || !u->down) { free(u->up); free(u->down); u->up = u->down = NULL; return -1; }
+    u->q = calloc(1, sizeof *u->q);
+    if (!u->up || !u->down || !u->q) {
+        free(u->up); free(u->down); free(u->q); u->up = u->down = NULL; u->q = NULL; return -1;
+    }
+    u->q->c_rtt = -1;
     link_init(u->up, u->psk, DEFAULT_REPEAT, DEFAULT_FEC_K, 1);
     link_init(u->down, u->psk, DEFAULT_REPEAT, DEFAULT_FEC_K, 1);
     if(u->replay_floor)dedup_seen(&u->up->dedup,u->replay_floor);
@@ -416,9 +549,21 @@ static void user_profile(vuser *u, vport *p) {
     d->ft = p->faketcp ? &u->ft : NULL;
 }
 
-static void user_bind(vuser *u, vport *p, const struct sockaddr_in *from, uint32_t local_ip) {
+static void user_bind(vuser *u, vport *p, const struct sockaddr_in *from, uint32_t local_ip,
+                      int new_session) {
     int moved = !u->bound || u->port != p || memcmp(&u->addr, from, sizeof *from) != 0;
     if (!moved) return;
+    char was[64], now_ep[64];
+    endpoint_str(&u->addr, was, sizeof was); endpoint_str(from, now_ep, sizeof now_ep);
+    time_t now = time(NULL);
+    long gap = u->last_rx ? (long)(now - u->last_rx) : -1;
+    if (!u->bound || new_session) {
+        u->q->since = now;
+        event_log(u, "connect", "from=%s port=%d silent=%lds", now_ep, p->port, gap);
+    } else {
+        u->q->roams++;
+        event_log(u, "roam", "from=%s to=%s port=%d silent=%lds", was, now_ep, p->port, gap);
+    }
     u->addr = *from;
     if (p->faketcp) {
         u->ft = p->rx;                         /* shares the raw fd and local port */
@@ -429,9 +574,6 @@ static void user_bind(vuser *u, vport *p, const struct sockaddr_in *from, uint32
     }
     if (u->port != p || !u->bound) { u->port = p; user_profile(u, p); }
     u->bound = 1;
-    fprintf(stderr, "[kanki] %s connected from %s:%d (%s %d)\n", u->name,
-            inet_ntoa(from->sin_addr), ntohs(from->sin_port),
-            p->faketcp ? "faketcp" : "udp", p->port);
 }
 
 /* answer "PING:<x>" with "PONG:<x>" (CONTROL, 10x, outside FEC) to whoever asked */
@@ -458,27 +600,54 @@ static int is_ping(const kanki_pkt *k) {
     return (k->flags & FLAG_CONTROL) && k->payload_len >= 5 && !memcmp(k->payload, "PING:", 5);
 }
 
-static int ping_dup(vuser *u, uint64_t seq) {
-    for (int i = 0; i < PING_SEEN; i++) if (u->ping_seen[i] == seq) return 1;
-    u->ping_seen[u->ping_pos++ % PING_SEEN] = seq;
-    return 0;
+static int is_control(const kanki_pkt *k, const char *tag) {
+    size_t n = strlen(tag);
+    return (k->flags & FLAG_CONTROL) && k->payload_len >= n && !memcmp(k->payload, tag, n);
+}
+
+/* "STAT:v1 rtt=MS loss=PERMILLE lost=N rec=N hops=N" from the client (downlink) */
+static void client_stat(vuser *u, const kanki_pkt *k) {
+    char m[160]; size_t n = k->payload_len < sizeof m - 1 ? k->payload_len : sizeof m - 1;
+    memcpy(m, k->payload, n); m[n] = 0;
+    int rtt; unsigned loss, hops; unsigned long long lost, rec;
+    if (sscanf(m, "STAT:v1 rtt=%d loss=%u lost=%llu rec=%llu hops=%u", &rtt, &loss, &lost, &rec, &hops) != 5) return;
+    qstat *q = u->q;
+    q->c_rtt = rtt < -1 ? -1 : (rtt > 60000 ? 60000 : rtt);
+    q->c_loss_pm = loss > 1000 ? 1000 : loss;
+    q->c_lost = lost; q->c_rec = rec; q->c_hops = hops;
+    q->c_tlost += lost; q->c_trec += rec; q->c_at = time(NULL);
+}
+
+/* uplink quality back to the client, so the app can show both directions */
+static void send_qual(vuser *u, time_t now) {
+    qstat *q = u->q;
+    if (!q || !u->bound || now - q->qual_at < QUAL_REPORT_S) return;
+    q->qual_at = now;
+    char m[96];
+    int n = snprintf(m, sizeof m, "QUAL:v1 loss=%u lost=%" PRIu64 " rec=%" PRIu64 " repeat=%d",
+                     q_loss_pm(&q->win), q->win.lost, q->win.recovered, u->down->cfg.repeat);
+    link_send(u->down, u->port->fd, (struct sockaddr *)&u->addr, sizeof u->addr, FLAG_CONTROL,
+              (const uint8_t *)m, (uint16_t)n);
 }
 
 /* deliver one decrypted packet coming from user u */
 static void user_deliver(vuser *u, int tun, const kanki_pkt *k) {
     if(k->seq<=u->replay_floor)return;
-    if (k->flags & FLAG_TAIL) { u->bound=0; return; }
+    if (k->flags & FLAG_TAIL) { u->bound=0; event_log(u, "disconnect", "by=client"); return; }
     if (is_ping(k)) {
         send_pong(u, u->port, &u->addr, u->ft.local_ip, k);
         return;
     }
+    if (is_control(k, "STAT:")) { client_stat(u, k); return; }
     if (!(k->flags & FLAG_DATA) || !within_quota(u) || !kanki_ipv4_valid(k->payload,k->payload_len,tun_mtu)) return;
     const uint8_t *ip = k->payload;
     uint32_t src;
     memcpy(&src, ip + 12, 4);
     if ((ip[0] >> 4) != 4 || src != u->ip) return;     /* only its own tunnel IP */
     if (!debit_packet(u,k->payload_len)) return;
-    if (write(tun, ip, k->payload_len) == k->payload_len) u->account->tx += k->payload_len;
+    if (write(tun, ip, k->payload_len) == k->payload_len) {
+        u->account->tx += k->payload_len; u->q->tx_bytes += k->payload_len;
+    }
 }
 
 /* one wire packet arrived on port p from `from` */
@@ -494,9 +663,15 @@ static void port_in(vport *p, int tun, const uint8_t *buf, int n,
         kanki_pkt k;
         if (kanki_open2(&u->up->cfg, buf, n, &k) != 0) continue;
         if(k.seq<=u->replay_floor && k.fec_idx!=FEC_PARITY_IDX)return;
+        int sender_repeat = u->up->cfg.repeat;
+        q_copy(u->q, &k, sender_repeat);
         int r = link_recv(u->up, buf, n, &k);
         if(r)u->last_rx = now;
-        while (r) { user_deliver(u, tun, &k); r = link_recv_stashed(u->up, &k); }
+        while (r) {
+            if (r == 2) q_recovered(u->q, &k, sender_repeat);
+            user_deliver(u, tun, &k);
+            r = link_recv_stashed(u->up, &k);
+        }
         if (u->up->pending_tune)
             link_send_tune(u->up, p->fd, (struct sockaddr *)&u->addr, sizeof u->addr);
         return;
@@ -509,16 +684,15 @@ static void port_in(vport *p, int tun, const uint8_t *buf, int n,
         if (kanki_open2(&u->probe, buf, n, &k) != 0) continue;
         if(k.seq<=u->replay_floor && k.fec_idx!=FEC_PARITY_IDX)return;
         if (user_links(u) != 0) return;
-        if (is_ping(&k)) {                    /* ping test: answer, don't move the session */
-            if (!ping_dup(u, k.seq)) send_pong(u, p, from, local_ip, &k);
-            return;
-        }
-        /* Reject replay-based roaming. One device slot owns one active endpoint;
-           NAT rebinding can resume after 10 seconds without authenticated traffic. */
-        if (u->bound && now-u->last_rx < 10) return;
+        /* Roaming: mobile operators (CGNAT) move a flow to a new public port
+           without notice. Follow the device at once, like WireGuard, when the
+           packet is authentic AND newer than anything seen; a replayed or
+           delayed copy can never move the session. Parity carries an XOR of
+           sequence numbers, so it never moves the session either. */
+        if (k.fec_idx == FEC_PARITY_IDX) return;
         if (u->up->dedup.top && k.seq <= u->up->dedup.top) return;
         if (!within_quota(u)) return;
-        user_bind(u, p, from, local_ip);
+        user_bind(u, p, from, local_ip, is_control(&k, "KANKI-HELLO"));
         port_in(p, tun, buf, n, from, local_ip);
         return;
     }
@@ -530,7 +704,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--check-config")) check_only=1;
         else if (!strcmp(argv[i], "--credit-ledger") && i+1<argc) credit_path=argv[++i];
         else if (!strcmp(argv[i], "--status-file") && i+1<argc) status_path=argv[++i];
-        else { fprintf(stderr, "usage: kanki-vpnd [--config /etc/kanki/kanki.conf]\n"); return 1; }
+        else if (!strcmp(argv[i], "--events-file") && i+1<argc) events_path=argv[++i];
+        else { fprintf(stderr, "usage: kanki-vpnd [--config FILE] [--status-file FILE] [--events-file FILE] [--credit-ledger FILE] [--check-config]\n"); return 1; }
     }
     inet_pton(AF_INET, "10.66.0.1", &srv_ip);
     srv_mask = htonl(0xFFFF0000u);
@@ -566,6 +741,14 @@ int main(int argc, char **argv) {
         time_t check_now=time(NULL);
         if(check_now!=last_check) {
             last_check=check_now;save_status();
+            for(int i=0;i<nusers;i++){       /* log quota / expiry transitions of known devices */
+                vuser *u=users[i];if(!u->q)continue;
+                int st=(u->expires&&(uint64_t)check_now>=u->expires)?1:(!within_quota(u)?2:0);
+                if(st!=u->limit_state){
+                    event_log(u,st==1?"expired":st==2?"quota":"allowed",st==1&&u->expires==1?"reason=disabled":NULL);
+                    u->limit_state=st;
+                }
+            }
             struct stat current;
             if(!stat(conf_path,&current) && (current.st_ino!=conf_stat.st_ino ||
                 current.st_mtim.tv_sec!=conf_stat.st_mtim.tv_sec || current.st_mtim.tv_nsec!=conf_stat.st_mtim.tv_nsec)) {
@@ -592,9 +775,11 @@ int main(int argc, char **argv) {
             if (!u->bound) continue;
             if (now - u->last_rx > SESSION_IDLE_S) {
                 u->bound = 0;
-                fprintf(stderr, "[kanki] %s idle, session closed\n", u->name);
+                event_log(u, "idle", "silent=%ds", SESSION_IDLE_S);
                 continue;
             }
+            q_roll(u, now);
+            send_qual(u, now);
             link_fec_idle(u->down, u->port->fd, (struct sockaddr *)&u->addr, sizeof u->addr);
         }
         if (sel <= 0) continue;
@@ -611,7 +796,7 @@ int main(int argc, char **argv) {
                 vuser *u = users[idx];
                 if (!u->bound || u->ip != dst || !within_quota(u)) continue;
                 if (!debit_packet(u,(uint64_t)len)) continue;
-                u->account->rx += (uint64_t)len;
+                u->account->rx += (uint64_t)len; u->q->rx_bytes += (uint64_t)len;
                 link_send(u->down, u->port->fd, (struct sockaddr *)&u->addr, sizeof u->addr,
                           FLAG_DATA, buf, (uint16_t)len);
             }

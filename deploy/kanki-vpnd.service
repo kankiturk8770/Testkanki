@@ -5,7 +5,7 @@ Wants=network-online.target
 [Service]
 User=kanki
 Group=kanki
-ExecStart=/usr/local/bin/kanki-vpnd --config /etc/kanki/kanki.conf --status-file /var/lib/kanki/status.txt
+ExecStart=/usr/local/bin/kanki-vpnd --config /etc/kanki/kanki.conf --status-file /var/lib/kanki/status.txt --events-file /var/lib/kanki/events.log
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2

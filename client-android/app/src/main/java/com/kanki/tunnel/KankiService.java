@@ -17,13 +17,16 @@ public class KankiService extends VpnService {
     private ParcelFileDescriptor tun;
     private Intent config;
     private int generation;
-    private long attemptAt;
+    private long attemptAt, lastGood, connectedAt, lossNoticeAt, lostNoticeAt, pingNoticeAt;
+    private long prevState=Long.MIN_VALUE, prevHops, prevLost, silentSince;
+    private static volatile long sessionStart;
+    public static long connectedSince(){return sessionStart;}
     private Network selectedNetwork;
     private boolean resolving, destroyed;
     private ConnectivityManager cm;
     private final ConnectivityManager.NetworkCallback callback=new ConnectivityManager.NetworkCallback(){
         @Override public void onAvailable(Network n){handler.post(()->{if(config!=null&&!n.equals(selectedNetwork)&&underlay()==null)connect();});}
-        @Override public void onLost(Network n){handler.post(()->{if(n.equals(selectedNetwork)){release();connect();}});}
+        @Override public void onLost(Network n){handler.post(()->{if(n.equals(selectedNetwork)){KankiEvents.add(KankiEvents.WARN,"شبکهٔ اینترنت گوشی قطع یا عوض شد");release();connect();}});}
     };
     @Override public void onCreate(){
         super.onCreate();cm=getSystemService(ConnectivityManager.class);
@@ -49,7 +52,9 @@ public class KankiService extends VpnService {
         if(intent==null||"STOP".equals(intent.getAction())){shutdown();return START_NOT_STICKY;}
         if(VpnService.prepare(this)!=null){shutdown();return START_NOT_STICKY;}
         if(config!=null)return START_NOT_STICKY;
-        active=true;config=new Intent(intent);notification("Connecting securely…");connect();handler.post(tick);return START_NOT_STICKY;
+        active=true;config=new Intent(intent);notification("Connecting securely…");
+        KankiEvents.resetHistory();KankiEvents.add(KankiEvents.INFO,"شروع اتصال به "+intent.getStringExtra("server")+":"+intent.getIntExtra("serverPort",0));
+        prevState=Long.MIN_VALUE;lastGood=0;sessionStart=0;connect();handler.post(tick);return START_NOT_STICKY;
     }
     private void release(){release(false);}
     private void release(boolean closeTun){
@@ -83,6 +88,7 @@ public class KankiService extends VpnService {
                             options.getIntExtra("repeat",4),options.getIntExtra("fecK",8),options.getBooleanExtra("fec",true),
                             options.getBooleanExtra("autotune",true),options.getIntExtra("jitter",0),fd);
                         if(result!=0)throw new IllegalStateException("Native start failed: "+result);
+                        prevHops=0;prevLost=0;
                         notification("Waiting for authenticated server response…");
                     }catch(Exception e){error(e.getMessage());shutdown();}
                 });
@@ -90,15 +96,48 @@ public class KankiService extends VpnService {
         });
     }
     private void error(String text){getSharedPreferences("kanki",MODE_PRIVATE).edit().putString("error",text==null?"Connection failed":text).apply();}
+    private static String pct(long pm){return String.format(java.util.Locale.US,"%.1f%%",pm/10.0);}
+    /** Turns native counters into a readable timeline: drops, recoveries, port moves, loss. */
+    private void watch(long[] s,long now){
+        long st=s[0];
+        if(st==2&&prevState!=2){
+            if(silentSince>0)KankiEvents.add(KankiEvents.OK,"اتصال برگشت پس از "+((now-silentSince+500)/1000)+" ثانیه قطعی");
+            else KankiEvents.add(KankiEvents.OK,"متصل شد · پینگ سرور "+s[1]+" ms");
+            silentSince=0;
+            if(sessionStart==0)sessionStart=System.currentTimeMillis();
+        }else if(st!=2&&prevState==2){
+            silentSince=now-s[12];
+            KankiEvents.add(KankiEvents.BAD,"سرور جواب نمی‌دهد (قطعی مسیر)");
+        }
+        prevState=st;
+        if(s[10]>prevHops){KankiEvents.add(KankiEvents.WARN,"مسیر جدید: پورت گوشی عوض شد تا اتصال برگردد (#"+s[10]+")");prevHops=s[10];}
+        long lost=s[5]+s[8];
+        if(lost>prevLost&&now-lostNoticeAt>10000){
+            KankiEvents.add(KankiEvents.BAD,(lost-prevLost)+" بسته از دست رفت · دریافت "+s[5]+" · ارسال "+s[8]+" (کل)");
+            prevLost=lost;lostNoticeAt=now;
+        }
+        if(st==2&&(s[4]>=150||(s[13]==1&&s[7]>=150))&&now-lossNoticeAt>30000){
+            KankiEvents.add(KankiEvents.WARN,"Loss بالا در مسیر · دریافت "+pct(s[4])+" · ارسال "+pct(s[7])+" · Repeat "+s[11]+"× (FEC جبران می‌کند)");
+            lossNoticeAt=now;
+        }
+        if(st==2&&s[1]>=180&&now-pingNoticeAt>30000){KankiEvents.add(KankiEvents.WARN,"پینگ سرور بالا رفت: "+s[1]+" ms");pingNoticeAt=now;}
+        KankiEvents.sample(st==2?s[1]:-1,Math.max(s[4],s[13]==1?s[7]:0));
+    }
     private final Runnable tick=new Runnable(){public void run(){
         if(config==null||destroyed)return;
-        long[] s=KankiNative.nativeStats();
-        if(!resolving&&(!KankiNative.nativeRunning() || (s!=null&&s[0]!=2&&SystemClock.elapsedRealtime()-attemptAt>15000)))connect();
-        else if(s!=null&&s[0]==2)notification("Connected · "+s[1]+" ms · ↓ "+s[2]+" B · ↑ "+s[3]+" B");
-        else notification("Connecting / waiting for server…");
-        handler.postDelayed(this,2000);
+        long[] s=KankiNative.nativeStats();long now=SystemClock.elapsedRealtime();
+        if(s!=null&&s.length>=14&&KankiNative.nativeRunning())watch(s,now);
+        if(s!=null&&s[0]==2)lastGood=now;
+        // The native worker already moves to a fresh port after 2.5 s of silence;
+        // a full restart (new DNS lookup, new session) is only the last resort.
+        if(!resolving&&(!KankiNative.nativeRunning()||(s!=null&&s[0]!=2&&now-Math.max(lastGood,attemptAt)>20000))){
+            KankiEvents.add(KankiEvents.WARN,"راه‌اندازی دوبارهٔ کامل اتصال");sessionStart=0;connect();
+        }
+        else if(s!=null&&s[0]==2)notification("متصل · "+s[1]+" ms · loss ↓"+pct(s[4])+" ↑"+pct(s[13]==1?s[7]:0));
+        else notification("در حال اتصال دوباره…");
+        handler.postDelayed(this,1000);
     }};
-    private void shutdown(){active=false;config=null;handler.removeCallbacks(tick);release(true);stopForeground(true);stopSelf();}
+    private void shutdown(){if(config!=null)KankiEvents.add(KankiEvents.INFO,"اتصال توسط کاربر قطع شد");sessionStart=0;active=false;config=null;handler.removeCallbacks(tick);release(true);stopForeground(true);stopSelf();}
     @Override public void onRevoke(){shutdown();super.onRevoke();}
     @Override public void onDestroy(){destroyed=true;active=false;config=null;handler.removeCallbacksAndMessages(null);release(true);cm.unregisterNetworkCallback(callback);resolver.shutdownNow();stopForeground(true);super.onDestroy();}
 }

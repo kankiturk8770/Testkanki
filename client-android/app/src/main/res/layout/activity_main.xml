@@ -1,37 +1,96 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:background="@drawable/screen">
-<LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="22dp" android:importantForAutofill="noExcludeDescendants">
-<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="◈ KANKI" android:textColor="#70EAC4" android:textSize="32sp" android:textStyle="bold" android:letterSpacing="0.14"/>
-<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="YOUR CONNECTION. REINFORCED." android:textColor="#93AAC2" android:textSize="12sp" android:letterSpacing="0.18" android:layout_marginBottom="24dp"/>
-<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="@drawable/card" android:gravity="center" android:layout_marginBottom="20dp">
-<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="◎" android:textColor="#70EAC4" android:textSize="66sp"/>
-<TextView android:id="@+id/tvStatus" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:text="○ آماده اتصال" android:textColor="#E4ECF7" android:textSize="16sp"/>
-<TextView android:id="@+id/tvTraffic" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:text="↓ 0 MiB     ↑ 0 MiB" android:textColor="#93AAC2" android:padding="12dp"/>
-<Button android:id="@+id/btnToggle" android:layout_width="match_parent" android:layout_height="58dp" android:text="اتصال امن" android:textColor="#092F29" android:backgroundTint="#70EAC4"/>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:background="@drawable/screen" android:overScrollMode="never">
+<LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingStart="18dp" android:paddingEnd="18dp" android:paddingTop="34dp" android:paddingBottom="28dp" android:importantForAutofill="noExcludeDescendants">
+
+    <!-- header -->
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="18dp">
+        <ImageView android:layout_width="40dp" android:layout_height="40dp" android:src="@drawable/ic_kanki" android:contentDescription="@null"/>
+        <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginStart="12dp">
+            <TextView android:id="@+id/tvBrand" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="KANKI" android:textColor="#FFFFFF" android:textSize="24sp" android:textStyle="bold" android:letterSpacing="0.18"/>
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="GAMING TUNNEL · LOSS SHIELD" android:textColor="#8C93B8" android:textSize="10sp" android:letterSpacing="0.2"/>
+        </LinearLayout>
+        <TextView android:id="@+id/tvBadge" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/chip_off" android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingTop="6dp" android:paddingBottom="6dp" android:text="آفلاین" android:textColor="#C9CEEA" android:textSize="12sp"/>
+    </LinearLayout>
+
+    <!-- hero -->
+    <LinearLayout style="@style/KankiCard" android:gravity="center_horizontal" android:paddingTop="26dp" android:paddingBottom="22dp">
+        <com.kanki.tunnel.ConnectButton android:id="@+id/btnToggle" android:layout_width="210dp" android:layout_height="210dp" android:contentDescription="اتصال"/>
+        <TextView android:id="@+id/tvStatus" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="18dp" android:gravity="center" android:text="آماده اتصال" android:textColor="#FFFFFF" android:textSize="18sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tvProfile" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:gravity="center" android:text="ابتدا لینک اشتراک را وارد کنید" android:textColor="#8C93B8" android:textSize="13sp"/>
+        <TextView android:id="@+id/tvTimer" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:gravity="center" android:text="" android:textColor="#22D3EE" android:textSize="14sp" android:fontFamily="monospace"/>
+    </LinearLayout>
+
+    <!-- live quality tiles -->
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginStart="-5dp" android:layout_marginEnd="-5dp">
+        <LinearLayout style="@style/KankiTile"><TextView android:id="@+id/tvPing" style="@style/KankiTileValue"/><TextView style="@style/KankiTileCaption" android:text="پینگ سرور (ms)"/></LinearLayout>
+        <LinearLayout style="@style/KankiTile"><TextView android:id="@+id/tvLoss" style="@style/KankiTileValue"/><TextView style="@style/KankiTileCaption" android:text="Loss مسیر ↓ / ↑"/></LinearLayout>
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginStart="-5dp" android:layout_marginEnd="-5dp">
+        <LinearLayout style="@style/KankiTile"><TextView android:id="@+id/tvSaved" style="@style/KankiTileValue"/><TextView style="@style/KankiTileCaption" android:text="نجات با FEC"/></LinearLayout>
+        <LinearLayout style="@style/KankiTile"><TextView android:id="@+id/tvLost" style="@style/KankiTileValue"/><TextView style="@style/KankiTileCaption" android:text="واقعاً از دست رفته"/></LinearLayout>
+        <LinearLayout style="@style/KankiTile"><TextView android:id="@+id/tvHops" style="@style/KankiTileValue"/><TextView style="@style/KankiTileCaption" android:text="تعویض مسیر"/></LinearLayout>
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginStart="-5dp" android:layout_marginEnd="-5dp" android:layout_marginBottom="11dp">
+        <LinearLayout style="@style/KankiTile"><TextView android:id="@+id/tvDown" style="@style/KankiTileValue" android:textSize="16sp"/><TextView style="@style/KankiTileCaption" android:text="دریافت"/></LinearLayout>
+        <LinearLayout style="@style/KankiTile"><TextView android:id="@+id/tvUp" style="@style/KankiTileValue" android:textSize="16sp"/><TextView style="@style/KankiTileCaption" android:text="ارسال"/></LinearLayout>
+        <LinearLayout style="@style/KankiTile"><TextView android:id="@+id/tvRepeat2" style="@style/KankiTileValue" android:textSize="16sp"/><TextView style="@style/KankiTileCaption" android:text="Repeat فعلی"/></LinearLayout>
+    </LinearLayout>
+
+    <!-- chart -->
+    <LinearLayout style="@style/KankiCard">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <TextView style="@style/KankiLabel" android:layout_width="0dp" android:layout_weight="1" android:text="کیفیت سه دقیقهٔ اخیر"/>
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="━ پینگ   ▮ loss" android:textColor="#8C93B8" android:textSize="11sp"/>
+        </LinearLayout>
+        <com.kanki.tunnel.SparkChart android:id="@+id/chart" android:layout_width="match_parent" android:layout_height="140dp"/>
+    </LinearLayout>
+
+    <!-- subscription -->
+    <LinearLayout style="@style/KankiCard">
+        <TextView style="@style/KankiLabel" android:text="اشتراک"/>
+        <EditText android:id="@+id/etSubscription" style="@style/KankiField" android:hint="https://… /sub/…" android:inputType="textUri" android:importantForAutofill="no" android:textDirection="ltr"/>
+        <Button android:id="@+id/btnImport" style="@style/KankiButton" android:text="دریافت اشتراک و انتخاب پروفایل"/>
+    </LinearLayout>
+
+    <!-- routing -->
+    <LinearLayout style="@style/KankiCard">
+        <TextView style="@style/KankiLabel" android:text="مسیر ترافیک"/>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <TextView android:id="@+id/chipFull" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:layout_marginEnd="6dp" android:background="@drawable/chip_on" android:gravity="center" android:text="Full VPN\nهمهٔ برنامه‌ها" android:textColor="#FFFFFF" android:textSize="12sp"/>
+            <TextView android:id="@+id/chipGaming" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:layout_marginStart="6dp" android:background="@drawable/chip_off" android:gravity="center" android:text="Gaming Smart\nفقط بازی‌ها" android:textColor="#C9CEEA" android:textSize="12sp"/>
+        </LinearLayout>
+        <Button android:id="@+id/btnGames" style="@style/KankiGlassButton" android:layout_marginTop="12dp" android:text="انتخاب بازی‌ها و برنامه‌های ورود"/>
+        <TextView android:id="@+id/tvGames" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:textColor="#8C93B8" android:textSize="12sp"/>
+    </LinearLayout>
+
+    <!-- events -->
+    <LinearLayout style="@style/KankiCard">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <TextView style="@style/KankiLabel" android:layout_width="0dp" android:layout_weight="1" android:text="رویدادهای اتصال"/>
+            <TextView android:id="@+id/btnClearLog" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="پاک کردن" android:textColor="#A9A2FF" android:textSize="12sp" android:padding="4dp"/>
+        </LinearLayout>
+        <LinearLayout android:id="@+id/eventList" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical"/>
+    </LinearLayout>
+
+    <!-- advanced -->
+    <Button android:id="@+id/btnAdvanced" style="@style/KankiGlassButton" android:layout_marginBottom="16dp" android:text="تنظیمات دستی (پیشرفته) ▾"/>
+    <LinearLayout android:id="@+id/advanced" style="@style/KankiCard" android:visibility="gone">
+        <TextView style="@style/KankiLabel" android:text="پروفایل اتصال"/>
+        <EditText android:id="@+id/etServer" style="@style/KankiField" android:hint="Server IPv4 / hostname" android:inputType="textUri" android:textDirection="ltr"/>
+        <EditText android:id="@+id/etPort" style="@style/KankiField" android:hint="UDP port · from subscription" android:inputType="number" android:textDirection="ltr"/>
+        <EditText android:id="@+id/etKey" style="@style/KankiField" android:hint="Private key · 64 hex" android:inputType="textPassword" android:importantForAutofill="no" android:textDirection="ltr"/>
+        <EditText android:id="@+id/etIp" style="@style/KankiField" android:hint="Tunnel IPv4 · assigned by panel" android:inputType="text" android:textDirection="ltr"/>
+        <EditText android:id="@+id/etDns" style="@style/KankiField" android:hint="DNS IPv4" android:text="1.1.1.1" android:inputType="text" android:textDirection="ltr"/>
+        <EditText android:id="@+id/etMtu" style="@style/KankiField" android:hint="MTU · 576–1400" android:text="1280" android:inputType="number" android:textDirection="ltr"/>
+        <TextView style="@style/KankiLabel" android:layout_marginTop="10dp" android:text="موتور ضد loss"/>
+        <TextView android:id="@+id/tvRepeat" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Repeat · 4×" android:textColor="#F2F5FF"/>
+        <SeekBar android:id="@+id/sbRepeat" android:layout_width="match_parent" android:layout_height="48dp"/>
+        <EditText android:id="@+id/etFecK" style="@style/KankiField" android:hint="FEC k · 2–16" android:text="8" android:inputType="number" android:textDirection="ltr"/>
+        <EditText android:id="@+id/etJitter" style="@style/KankiField" android:hint="Jitter µs · 0–100000" android:text="0" android:inputType="number" android:textDirection="ltr"/>
+        <CheckBox android:id="@+id/cbFec" android:layout_width="match_parent" android:layout_height="48dp" android:text="XOR FEC recovery" android:textColor="#F2F5FF" android:checked="true"/>
+        <CheckBox android:id="@+id/cbAutotune" android:layout_width="match_parent" android:layout_height="48dp" android:text="Adaptive repeat · 3–10×" android:textColor="#F2F5FF" android:checked="true"/>
+    </LinearLayout>
+
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:text="IPv4 VPN · IPv6 مسدود می‌شود · پینگ نمایش‌داده‌شده تا سرور تونل است" android:textColor="#6B7299" android:textSize="11sp" android:paddingTop="4dp"/>
 </LinearLayout>
-<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="01 / SUBSCRIPTION" android:textSize="11sp" android:textColor="#70EAC4" android:layout_marginBottom="12dp"/>
-<EditText android:id="@+id/etSubscription" style="@style/KankiField" android:hint="https://vpn.example.com/sub/…" android:inputType="textUri" android:importantForAutofill="no"/>
-<Button android:id="@+id/btnImport" android:layout_width="match_parent" android:layout_height="48dp" android:text="دریافت اشتراک و انتخاب دستگاه"/>
-<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="02 / ROUTING" android:textSize="11sp" android:textColor="#70EAC4" android:layout_marginTop="24dp" android:layout_marginBottom="12dp"/>
-<Spinner android:id="@+id/mode" android:layout_width="match_parent" android:layout_height="52dp" android:background="@drawable/field" android:padding="8dp"/>
-<Button android:id="@+id/btnGames" android:layout_width="match_parent" android:layout_height="48dp" android:text="انتخاب بازی‌ها و برنامه‌های ورود"/>
-<TextView android:id="@+id/tvGames" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#93AAC2" android:textSize="12sp" android:layout_marginBottom="16dp"/>
-<Button android:id="@+id/btnAdvanced" android:layout_width="match_parent" android:layout_height="48dp" android:text="تنظیمات دستی (پیشرفته) ▾"/>
-<LinearLayout android:id="@+id/advanced" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:visibility="gone">
-<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="03 / CONNECTION PROFILE" android:textSize="11sp" android:textColor="#70EAC4" android:layout_marginTop="12dp" android:layout_marginBottom="12dp"/>
-<EditText android:id="@+id/etServer" style="@style/KankiField" android:hint="Server IPv4 / hostname" android:inputType="textUri"/>
-<EditText android:id="@+id/etPort" style="@style/KankiField" android:hint="UDP port · from subscription" android:inputType="number"/>
-<EditText android:id="@+id/etKey" style="@style/KankiField" android:hint="Private key · 64 hex" android:inputType="textPassword" android:importantForAutofill="no"/>
-<EditText android:id="@+id/etIp" style="@style/KankiField" android:hint="Tunnel IPv4 · assigned by panel" android:inputType="text"/>
-<EditText android:id="@+id/etDns" style="@style/KankiField" android:hint="DNS IPv4" android:text="1.1.1.1" android:inputType="text"/>
-<EditText android:id="@+id/etMtu" style="@style/KankiField" android:hint="MTU · 576–1400" android:text="1280" android:inputType="number"/>
-<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="04 / RESILIENCE ENGINE" android:textSize="11sp" android:textColor="#70EAC4" android:layout_marginTop="16dp" android:layout_marginBottom="12dp"/>
-<TextView android:id="@+id/tvRepeat" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Repeat · 4×" android:textColor="#E4ECF7"/>
-<SeekBar android:id="@+id/sbRepeat" android:layout_width="match_parent" android:layout_height="48dp"/>
-<EditText android:id="@+id/etFecK" style="@style/KankiField" android:hint="FEC k · 2–16" android:text="8" android:inputType="number"/>
-<EditText android:id="@+id/etJitter" style="@style/KankiField" android:hint="Jitter µs · 0–100000" android:text="0" android:inputType="number"/>
-<CheckBox android:id="@+id/cbFec" android:layout_width="match_parent" android:layout_height="48dp" android:text="XOR FEC recovery" android:checked="true"/>
-<CheckBox android:id="@+id/cbAutotune" android:layout_width="match_parent" android:layout_height="48dp" android:text="Adaptive repeat · 3–10×" android:checked="true"/>
-</LinearLayout>
-<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="IPv4 VPN · IPv6 مسدود می‌شود. در Gaming Smart فقط برنامه‌های انتخابی و سرویس‌های Google Play تونل می‌شوند. برای ورود با مرورگر، مرورگر را هم انتخاب کنید." android:textColor="#93AAC2" android:textSize="12sp" android:paddingTop="16dp" android:paddingBottom="24dp"/>
-</LinearLayout></ScrollView>
+</ScrollView>

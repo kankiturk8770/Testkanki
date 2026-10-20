@@ -15,3 +15,4 @@ kanki.conf
 status.txt
 client-android/openssl-android/
 tests/tools/kanki-vpn-client
+tests/tools/jni_harness

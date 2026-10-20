@@ -36,7 +36,7 @@ public class KankiDeviceTest {
     @Test public void nativeRejectsInvalidInputsWithoutStarting(){
         KankiNative.nativeStop();
         assertEquals(-2,KankiNative.nativeStart(null,"127.0.0.1",4000,"bad",4,8,true,true,0,-1));
-        assertFalse(KankiNative.nativeRunning());assertEquals(4,KankiNative.nativeStats().length);
+        assertFalse(KankiNative.nativeRunning());assertEquals(14,KankiNative.nativeStats().length);
     }
     @Test public void actualTunUdpDnsAndDisconnect() throws Exception {
         Bundle args=InstrumentationRegistry.getArguments();
