@@ -1,0 +1,22 @@
+[Unit]
+Description=KANKI IPv4 VPN engine
+After=network-online.target kanki-admin.service
+Wants=network-online.target
+[Service]
+User=kanki
+Group=kanki
+ExecStart=/usr/local/bin/kanki-vpnd --config /etc/kanki/kanki.conf --status-file /var/lib/kanki/status.txt
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/kanki
+PrivateTmp=yes
+UMask=0027
+LimitNOFILE=4096
+[Install]
+WantedBy=multi-user.target

@@ -1,10 +1,12 @@
 package com.kanki.tunnel;
-
-public class KankiNative {
+public final class KankiNative {
     static { System.loadLibrary("kanki"); }
-    public static native int nativeStart(String server, int serverPort, int localPort,
-                                         String keyHex, int repeat, int fecK,
-                                         boolean fecOn, boolean autotune, int jitter);
-    public static native void nativeStop();
-    public static native boolean nativeRunning();
+    private KankiNative() {}
+    public static synchronized native int nativeStart(KankiService service, String server,
+        int serverPort, String keyHex, int repeat, int fecK,
+        boolean fecOn, boolean autotune, int jitter, int tunFd);
+    public static synchronized native void nativeStop();
+    public static synchronized native boolean nativeRunning();
+    /** state: -1 failure, 0 idle, 1 connecting, 2 authenticated PONG; RTT ms, RX, TX. */
+    public static synchronized native long[] nativeStats();
 }

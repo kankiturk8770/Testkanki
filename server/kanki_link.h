@@ -85,7 +85,12 @@ static void tune_note(kanki_link *l, int is_dup, int sender_repeat) {
 static int tune_apply(kanki_link *l, const kanki_pkt *pkt) {
     if (!(pkt->flags & FLAG_CONTROL) || pkt->payload_len < 6) return 0;
     if (memcmp(pkt->payload, "TUNE:", 5) != 0) return 0;
-    int n = atoi((const char *)pkt->payload + 5);
+    int n = 0;
+    if (pkt->payload_len > 7) return 0;
+    for (int i = 5; i < pkt->payload_len; i++) {
+        if (pkt->payload[i] < '0' || pkt->payload[i] > '9') return 0;
+        n = n * 10 + pkt->payload[i] - '0';
+    }
     if (n < MIN_REPEAT) n = MIN_REPEAT;
     if (n > MAX_REPEAT) n = MAX_REPEAT;
     (l->tx ? l->tx : l)->cfg.repeat = n;
@@ -101,6 +106,7 @@ static void link_tx_copies(kanki_link *l, int fd, const struct sockaddr *to, soc
         uint8_t wire[KANKI_MAX_PKT];
         int wlen = kanki_seal2(&l->cfg, flags, seq, fb, fidx, fk,
                                payload, plen, wire);
+        if (wlen <= 0) continue;
         if (l->ft) ftcp_send(l->ft, wire, wlen);
         else       sendto(fd, wire, wlen, 0, to, tolen);
         if (i + 1 < n) kanki_jitter_us(l->cfg.jitter_us);
@@ -123,7 +129,7 @@ static void link_fec_flush(kanki_link *l, int fd, const struct sockaddr *to, soc
 /* send one app payload through multiplication + FEC */
 static void link_send(kanki_link *l, int fd, const struct sockaddr *to, socklen_t tolen,
                       uint8_t flags, const uint8_t *payload, uint16_t plen) {
-    if (plen > KANKI_MAX_MTU) plen = KANKI_MAX_MTU;
+    if (plen > KANKI_MAX_MTU || (plen && !payload)) return;
     uint64_t seq = l->cfg.tx_seq++;
     if (l->cfg.fec_enabled) {
         if (l->tx_idx >= l->cfg.fec_k) link_fec_flush(l, fd, to, tolen);
@@ -166,7 +172,10 @@ static struct timeval link_poll_tv(const kanki_link *l) {
 static int link_recv(kanki_link *l, const uint8_t *wire, int wlen, kanki_pkt *out) {
     kanki_pkt pkt;
     if (kanki_open2(&l->cfg, wire, wlen, &pkt) != 0) return 0;
-    if (tune_apply(l, &pkt)) return 0;                 /* TUNE control */
+    if ((pkt.flags & FLAG_CONTROL) && pkt.payload_len >= 5 && !memcmp(pkt.payload, "TUNE:", 5)) {
+        if (!dedup_seen(&l->dedup, pkt.seq)) tune_apply(l, &pkt);
+        return 0;
+    } /* bounded, replay checked TUNE */
     if (pkt.fec_idx != FEC_PARITY_IDX && l->cfg.fec_enabled && pkt.fec_k >= 2) {
         int dup = dedup_seen(&l->dedup, pkt.seq);
         tune_note(l, dup, l->cfg.repeat);              /* sender uses same repeat */

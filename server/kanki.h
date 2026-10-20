@@ -49,6 +49,25 @@ typedef struct {
     uint8_t  rx_keyid[3];
 } kanki_cfg;
 
+/* Validate full IPv4 datagrams before injecting them into a TUN device. */
+static inline int kanki_ipv4_valid(const uint8_t *p, size_t n, size_t mtu) {
+    if (n < 20 || n > mtu || (p[0] >> 4) != 4) return 0;
+    size_t ihl = (p[0] & 15) * 4u;
+    return ihl >= 20 && ihl <= n && (((size_t)p[2] << 8) | p[3]) == n;
+}
+
+static inline int kanki_parse_key(const char *hex, uint8_t key[32]) {
+    if (!hex || strlen(hex) != 64) return -1;
+    for (int i = 0; i < 64; i++) {
+        unsigned char c = hex[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F'))) return -1;
+    }
+    for (int i = 0; i < 32; i++)
+        if (sscanf(hex + i * 2, "%2hhx", &key[i]) != 1) return -1;
+    return 0;
+}
+
 /* ---------- crypto ---------- */
 
 static void kanki_jitter_us(int max_us) {
@@ -111,10 +130,11 @@ typedef struct {
 static int kanki_seal2(kanki_cfg *c, uint8_t flags, uint64_t seq,
                        uint32_t fec_block, uint8_t fec_idx, uint8_t fec_k,
                        const uint8_t *payload, uint16_t plen, uint8_t *out) {
+    if (plen > KANKI_MAX_PAYLOAD || (plen && !payload)) return -1;
     if (kanki_now_epoch() != c->epoch) kanki_derive_epoch(c, kanki_now_epoch());
     /* fresh random 96-bit GCM IV per copy, sent in clear */
     uint8_t iv[12];
-    RAND_bytes(iv, sizeof iv);
+    if (RAND_bytes(iv, sizeof iv) != 1) return -1;
 
     uint8_t plain[KANKI_MAX_PKT], *p = plain;
     uint8_t padlen = 0; RAND_bytes(&padlen, 1); padlen %= (KANKI_MAX_PAD + 1);
@@ -127,6 +147,7 @@ static int kanki_seal2(kanki_cfg *c, uint8_t flags, uint64_t seq,
     *p++ = (uint8_t)(plen >> 8); *p++ = (uint8_t)plen;
     if (plen) memcpy(p, payload, plen);
     p += plen;
+    if (RAND_bytes(p, padlen) != 1) return -1;
     p += padlen;
     int plain_len = (int)(p - plain);
 
@@ -134,6 +155,7 @@ static int kanki_seal2(kanki_cfg *c, uint8_t flags, uint64_t seq,
     int len, total = 0;
     out[0] = c->keyid;
     memcpy(out + 1, iv, 12);   /* 12-byte IV in clear — random-looking, harmless */
+    if (!ctx) return -1;
     EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL);
     EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL);
     EVP_EncryptInit_ex(ctx, NULL, NULL, c->enc_key, iv);
@@ -168,6 +190,7 @@ static int kanki_open2(kanki_cfg *c, const uint8_t *in, int inlen, kanki_pkt *pk
         const uint8_t *key = c->rx_key[order[e]];
         if (in[0] != c->rx_keyid[order[e]]) continue;
         EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+        if (!ctx) return -1;
         uint8_t plain[KANKI_MAX_PKT];
         int len, total = 0;
         EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL);

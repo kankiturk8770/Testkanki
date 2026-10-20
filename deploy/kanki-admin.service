@@ -1,0 +1,19 @@
+[Unit]
+Description=KANKI management API
+After=network.target
+[Service]
+User=kanki
+Group=kanki
+WorkingDirectory=/var/lib/kanki
+EnvironmentFile=/etc/kanki-admin.env
+ExecStart=/usr/bin/python3 /opt/kanki/admin/kanki_admin.py
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/etc/kanki /var/lib/kanki
+PrivateTmp=yes
+UMask=0027
+[Install]
+WantedBy=multi-user.target

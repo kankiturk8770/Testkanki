@@ -68,6 +68,9 @@ static int vpnc_run(const vpnc_cfg *c, int tun, volatile int *running, vpnc_stat
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     kanki_link *up = vpnc_link(c, c->fec_on), *down = vpnc_link(c, 1);
     if (fd < 0 || !up || !down) { free(up); free(down); if (fd >= 0) close(fd); st->state = VPNC_ERROR; return -1; }
+    if (connect(fd,(struct sockaddr *)&srv,sizeof srv)<0) {
+        close(fd);free(up);free(down);st->state=VPNC_ERROR;return -1;
+    }
     down->tx = up;                    /* TUNE from the server adjusts what we send it */
     int buf = 4 << 20;
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf, sizeof buf);
@@ -95,12 +98,14 @@ static int vpnc_run(const vpnc_cfg *c, int tun, volatile int *running, vpnc_stat
         if (tv.tv_usec > 100000) tv.tv_usec = 100000;      /* keep ping cadence + stop latency */
         int sel = select((tun > fd ? tun : fd) + 1, &rf, NULL, NULL, &tv);
         link_fec_idle(up, fd, to, sizeof srv);
+        if (sel<0 && errno!=EINTR) { st->state=VPNC_ERROR;break; }
         if (sel <= 0) continue;
 
         if (FD_ISSET(tun, &rf)) {                           /* device -> server */
             for (int b = 0; b < 64; b++) {
                 ssize_t n = read(tun, pkt, KANKI_MAX_MTU);
                 if (n <= 0) break;
+                if (!kanki_ipv4_valid(pkt,n,KANKI_MAX_MTU)) continue;
                 link_send(up, fd, to, sizeof srv, FLAG_DATA, pkt, (uint16_t)n);
                 st->tx_bytes += (uint64_t)n;
             }
@@ -112,7 +117,7 @@ static int vpnc_run(const vpnc_cfg *c, int tun, volatile int *running, vpnc_stat
                 kanki_pkt k;
                 int r = link_recv(down, pkt, (int)n, &k);
                 while (r) {
-                    if (k.flags & FLAG_DATA) {
+                    if ((k.flags & FLAG_DATA) && kanki_ipv4_valid(k.payload,k.payload_len,KANKI_MAX_MTU)) {
                         if (write(tun, k.payload, k.payload_len) > 0) st->rx_bytes += k.payload_len;
                     } else {
                         int64_t rtt = vpnc_pong_rtt(&k, kanki_mono_us());
@@ -143,6 +148,7 @@ static int vpnc_ping(const vpnc_cfg *c, int tries, int timeout_ms) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     kanki_link *tx = vpnc_link(c, 0), *rx = vpnc_link(c, 1);
     if (fd < 0 || !tx || !rx) { free(tx); free(rx); if (fd >= 0) close(fd); return -1; }
+    if(connect(fd,(struct sockaddr*)&srv,sizeof srv)<0){close(fd);free(tx);free(rx);return -1;}
     tx->cfg.jitter_us = 0;
     int best = -1;
     uint8_t pkt[KANKI_MAX_PKT];

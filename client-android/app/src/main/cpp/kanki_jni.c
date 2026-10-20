@@ -1,156 +1,132 @@
-/* kanki_jni.c — JNI bridge: runs the kanki client loop on a native thread */
+/* JNI lifecycle owns the worker; Java owns TUN until nativeStop has joined. */
 #include <jni.h>
 #include <pthread.h>
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
+#include <stdatomic.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <arpa/inet.h>
-#include <netdb.h>
 #include <sys/select.h>
 #include <android/log.h>
-
 #include "kanki_link.h"
-
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "kanki", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "kanki", __VA_ARGS__)
-
-static volatile int g_running = 0;
-static pthread_t g_thread;
-static int g_joinable = 0;        /* thread started and not yet joined */
-static int g_tfd = -1, g_lfd = -1;
-
-typedef struct {
-    char server[256];
-    uint16_t server_port;
-    uint16_t local_port;
-    uint8_t psk[32];
-    int repeat, fec_k, fec_on, autotune, jitter;
-} jni_cfg;
-
-static jni_cfg g_cfg;
-
-/* one wire packet from the server: deliver DATA (plus anything FEC rebuilt)
-   to the local app, answer with TUNE if auto-tune asks for it */
-static void tunnel_in(kanki_link *down, const struct sockaddr_in *server,
-                      const uint8_t *buf, int n,
-                      const struct sockaddr_in *app, socklen_t alen, int have_app) {
-    kanki_pkt pkt;
-    int r = link_recv(down, buf, n, &pkt);
-    while (r) {
-        if (have_app && (pkt.flags & FLAG_DATA))
-            sendto(g_lfd, pkt.payload, pkt.payload_len, 0, (const struct sockaddr *)app, alen);
-        r = link_recv_stashed(down, &pkt);
-    }
-    if (down->pending_tune)
-        link_send_tune(down, g_tfd, (const struct sockaddr *)server, sizeof *server);
+static atomic_int running, state, rtt;
+static atomic_llong rx_bytes, tx_bytes;
+static pthread_t thread;
+static int joinable;
+static JavaVM *vm;
+static jobject service_ref;
+static struct {
+    struct sockaddr_in server;
+    int tun_fd, repeat, fec_k, fec, autotune, jitter;
+    uint8_t key[32];
+} cfg;
+static int protect_socket(int fd) {
+    JNIEnv *env=NULL;
+    if ((*vm)->AttachCurrentThread(vm,&env,NULL)!=JNI_OK) return 0;
+    jclass c=(*env)->GetObjectClass(env,service_ref);
+    jmethodID m=c?(*env)->GetMethodID(env,c,"protect","(I)Z"):NULL;
+    int ok=m&&(*env)->CallBooleanMethod(env,service_ref,m,fd);
+    if ((*env)->ExceptionCheck(env)) {(*env)->ExceptionClear(env);ok=0;}
+    if(c)(*env)->DeleteLocalRef(env,c);
+    (*vm)->DetachCurrentThread(vm);return ok;
 }
-
-static void *client_thread(void *arg) {
+static void *worker(void *arg) {
     (void)arg;
-    char port[16]; snprintf(port, sizeof port, "%u", g_cfg.server_port);
-    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_DGRAM }, *ai;
-    if (getaddrinfo(g_cfg.server, port, &hints, &ai) != 0) {
-        LOGE("dns fail"); g_running = 0; return NULL;
-    }
-    struct sockaddr_in server = *(struct sockaddr_in *)ai->ai_addr;
-    freeaddrinfo(ai);
-
-    g_tfd = socket(AF_INET, SOCK_DGRAM, 0);
-    g_lfd = socket(AF_INET, SOCK_DGRAM, 0);
-    struct sockaddr_in bind_addr = { .sin_family = AF_INET };
-    bind_addr.sin_port = htons(g_cfg.local_port);
-    inet_pton(AF_INET, "127.0.0.1", &bind_addr.sin_addr);
-    if (g_tfd < 0 || g_lfd < 0 || bind(g_lfd, (struct sockaddr *)&bind_addr, sizeof bind_addr) < 0) {
-        LOGE("bind fail");
-        if (g_tfd >= 0) close(g_tfd);
-        if (g_lfd >= 0) close(g_lfd);
-        g_tfd = g_lfd = -1; g_running = 0;
-        return NULL;
-    }
-
-    kanki_link up = {0}, down = {0};
-    link_init(&up, g_cfg.psk, g_cfg.repeat, g_cfg.fec_k, g_cfg.fec_on);
-    link_init(&down, g_cfg.psk, g_cfg.repeat, g_cfg.fec_k, g_cfg.fec_on);
-    up.autotune = g_cfg.autotune; down.autotune = g_cfg.autotune;
-    up.cfg.jitter_us = g_cfg.jitter; down.cfg.jitter_us = g_cfg.jitter;
-    down.tx = &up;                     /* TUNE from the server adjusts what we send it */
-
-    const char *hello = "KANKI-HELLO";
-    link_send(&up, g_tfd, (struct sockaddr *)&server, sizeof server, FLAG_CONTROL,
-              (const uint8_t *)hello, strlen(hello));
-    LOGI("tunnel up: 127.0.0.1:%u -> %s:%u repeat=%d fec=%d autotune=%d",
-         g_cfg.local_port, g_cfg.server, g_cfg.server_port,
-         up.cfg.repeat, g_cfg.fec_on, g_cfg.autotune);
-
-    struct sockaddr_in app = {0}; socklen_t alen = sizeof app; int have_app = 0;
-    uint8_t buf[KANKI_MAX_PKT];
-    int maxfd = (g_tfd > g_lfd ? g_tfd : g_lfd) + 1;
-    while (g_running) {
-        fd_set rf; FD_ZERO(&rf); FD_SET(g_tfd, &rf); FD_SET(g_lfd, &rf);
-        struct timeval tv = link_poll_tv(&up);
-        int sel = select(maxfd, &rf, NULL, NULL, &tv);
-        link_fec_idle(&up, g_tfd, (struct sockaddr *)&server, sizeof server);
-        if (sel <= 0) continue;
-        if (FD_ISSET(g_lfd, &rf)) {
-            struct sockaddr_in from; socklen_t flen = sizeof from;
-            ssize_t n = recvfrom(g_lfd, buf, sizeof buf, 0, (struct sockaddr *)&from, &flen);
-            if (n > 0) {
-                app = from; alen = flen; have_app = 1;   /* follow the app's latest port */
-                link_send(&up, g_tfd, (struct sockaddr *)&server, sizeof server,
-                          FLAG_DATA, buf, (uint16_t)n);
+    int fd=socket(AF_INET,SOCK_DGRAM,0);
+    kanki_link *up=calloc(1,sizeof *up), *down=calloc(1,sizeof *down);
+    int failed=0;
+    if(fd<0||!up||!down||!protect_socket(fd)) {failed=1;goto done;}
+    if(connect(fd,(struct sockaddr*)&cfg.server,sizeof cfg.server)<0){failed=1;goto done;}
+    int input=cfg.tun_fd;
+    if(fd>=FD_SETSIZE||input>=FD_SETSIZE){failed=1;goto done;}
+    fcntl(input,F_SETFL,fcntl(input,F_GETFL)|O_NONBLOCK);
+    fcntl(fd,F_SETFL,fcntl(fd,F_GETFL)|O_NONBLOCK);
+    int bufsize=1<<20;setsockopt(fd,SOL_SOCKET,SO_RCVBUF,&bufsize,sizeof bufsize);
+    link_init(up,cfg.key,cfg.repeat,cfg.fec_k,cfg.fec);
+    link_init(down,cfg.key,cfg.repeat,cfg.fec_k,1);
+    up->autotune=down->autotune=cfg.autotune;up->cfg.jitter_us=cfg.jitter;
+    down->tx=up;
+    const struct sockaddr *to=(struct sockaddr*)&cfg.server;
+    link_send(up,fd,to,sizeof cfg.server,FLAG_CONTROL,(uint8_t*)"KANKI-HELLO",11);
+    uint64_t last_ping=0,last_pong=0;
+    uint8_t wire[KANKI_MAX_PKT];
+    while(atomic_load(&running)) {
+        uint64_t now=kanki_mono_us();
+        if(now-last_ping>=1000000) {
+            uint8_t m[13];memcpy(m,"PING:",5);
+            for(int i=0;i<8;i++)m[5+i]=(uint8_t)(now>>(8*i));
+            link_send(up,fd,to,sizeof cfg.server,FLAG_CONTROL,m,sizeof m);last_ping=now;
+        }
+        if(!last_pong||now-last_pong>5000000){atomic_store(&state,1);atomic_store(&rtt,-1);}
+        fd_set rf;FD_ZERO(&rf);FD_SET(fd,&rf);FD_SET(input,&rf);
+        struct timeval tv=link_poll_tv(up);if(tv.tv_usec>100000)tv.tv_usec=100000;
+        int nready=select((fd>input?fd:input)+1,&rf,NULL,NULL,&tv);
+        link_fec_idle(up,fd,to,sizeof cfg.server);
+        if(nready<0){if(errno==EINTR)continue;failed=1;break;}
+        if(!nready)continue;
+        if(FD_ISSET(input,&rf)) {
+            ssize_t n=read(input,wire,sizeof wire);
+            if(n>0 && n<=KANKI_MAX_MTU && kanki_ipv4_valid(wire,n,KANKI_MAX_MTU)) {
+                link_send(up,fd,to,sizeof cfg.server,FLAG_DATA,wire,n);atomic_fetch_add(&tx_bytes,n);
             }
         }
-        if (FD_ISSET(g_tfd, &rf)) {
-            ssize_t n = recvfrom(g_tfd, buf, sizeof buf, 0, NULL, NULL);
-            if (n > 0) tunnel_in(&down, &server, buf, (int)n, &app, alen, have_app);
+        if(FD_ISSET(fd,&rf)) {
+            for(int b=0;b<64;b++) {
+                ssize_t n=recv(fd,wire,sizeof wire,0);if(n<=0)break;
+                kanki_pkt pkt;int got=link_recv(down,wire,n,&pkt);
+                while(got) {
+                    if(pkt.flags&FLAG_DATA) {
+                        ssize_t w=-1;
+                        if(kanki_ipv4_valid(pkt.payload,pkt.payload_len,KANKI_MAX_MTU)) w=write(input,pkt.payload,pkt.payload_len);
+                        if(w>0)atomic_fetch_add(&rx_bytes,w);
+                    } else if((pkt.flags&FLAG_CONTROL)&&pkt.payload_len==13&&!memcmp(pkt.payload,"PONG:",5)) {
+                        uint64_t sent=0;for(int i=0;i<8;i++)sent|=(uint64_t)pkt.payload[5+i]<<(8*i);
+                        uint64_t current=kanki_mono_us();
+                        if(sent<=current&&current-sent<=5000000){last_pong=current;atomic_store(&rtt,(current-sent+500)/1000);atomic_store(&state,2);}
+                    }
+                    got=link_recv_stashed(down,&pkt);
+                }
+                if(down->pending_tune)link_send_tune(down,fd,to,sizeof cfg.server);
+            }
         }
     }
-    link_send(&up, g_tfd, (struct sockaddr *)&server, sizeof server, FLAG_TAIL, NULL, 0);
-    close(g_tfd); close(g_lfd); g_tfd = g_lfd = -1;
-    LOGI("tunnel stopped");
+    link_send(up,fd,to,sizeof cfg.server,FLAG_TAIL,NULL,0);
+ done:
+    if(fd>=0)close(fd);
+    free(up);free(down);
+    atomic_store(&running,0);atomic_store(&state,failed?-1:0);atomic_store(&rtt,-1);
     return NULL;
 }
-
-static int parse_hex(const char *hex, uint8_t out[32]) {
-    if (strlen(hex) != 64) return -1;
-    for (int i = 0; i < 32; i++)
-        if (sscanf(hex + 2 * i, "%2hhx", &out[i]) != 1) return -1;
-    return 0;
-}
-
-JNIEXPORT jint JNICALL
-Java_com_kanki_tunnel_KankiNative_nativeStart(JNIEnv *env, jclass cls,
-        jstring server, jint serverPort, jint localPort, jstring keyHex,
-        jint repeat, jint fecK, jboolean fecOn, jboolean autotune, jint jitter) {
+JNIEXPORT jint JNICALL Java_com_kanki_tunnel_KankiNative_nativeStart(JNIEnv *env,jclass cls,
+ jobject service,jstring server,jint port,jstring hex,jint repeat,jint fecK,
+ jboolean fec,jboolean autotune,jint jitter,jint tunFd) {
     (void)cls;
-    if (g_running) return -1;
-    if (g_joinable) { pthread_join(g_thread, NULL); g_joinable = 0; }   /* thread that quit on its own */
-    const char *srv = (*env)->GetStringUTFChars(env, server, NULL);
-    const char *key = (*env)->GetStringUTFChars(env, keyHex, NULL);
-    snprintf(g_cfg.server, sizeof g_cfg.server, "%s", srv);
-    int bad = parse_hex(key, g_cfg.psk);
-    (*env)->ReleaseStringUTFChars(env, server, srv);
-    (*env)->ReleaseStringUTFChars(env, keyHex, key);
-    if (bad) return -2;
-    g_cfg.server_port = (uint16_t)serverPort;
-    g_cfg.local_port  = (uint16_t)localPort;
-    g_cfg.repeat = repeat; g_cfg.fec_k = fecK;
-    g_cfg.fec_on = fecOn; g_cfg.autotune = autotune; g_cfg.jitter = jitter;
-    g_running = 1;
-    if (pthread_create(&g_thread, NULL, client_thread, NULL) != 0) { g_running = 0; return -3; }
-    g_joinable = 1;
-    return 0;
+    if(atomic_load(&running))return -1;
+    if(!service||!server||!hex||port<1||port>65535||
+       repeat<3||repeat>10||fecK<2||fecK>MAX_FEC_K||jitter<0||jitter>100000||tunFd<0)return -2;
+    if(joinable){pthread_join(thread,NULL);joinable=0;}
+    if(service_ref){(*env)->DeleteGlobalRef(env,service_ref);service_ref=NULL;}
+    const char *host=(*env)->GetStringUTFChars(env,server,NULL);if(!host)return -3;
+    memset(&cfg,0,sizeof cfg);cfg.server.sin_family=AF_INET;cfg.server.sin_port=htons(port);
+    int valid=inet_pton(AF_INET,host,&cfg.server.sin_addr)==1;(*env)->ReleaseStringUTFChars(env,server,host);
+    const char *key=(*env)->GetStringUTFChars(env,hex,NULL);if(!key)return -3;
+    int bad=kanki_parse_key(key,cfg.key);(*env)->ReleaseStringUTFChars(env,hex,key);
+    if(!valid||bad)return -2;
+    cfg.tun_fd=tunFd;cfg.repeat=repeat;cfg.fec_k=fecK;cfg.fec=fec;
+    cfg.autotune=autotune;cfg.jitter=jitter;
+    if((*env)->GetJavaVM(env,&vm)!=JNI_OK)return -3;
+    service_ref=(*env)->NewGlobalRef(env,service);if(!service_ref)return -3;
+    atomic_store(&state,1);atomic_store(&rtt,-1);atomic_store(&rx_bytes,0);atomic_store(&tx_bytes,0);atomic_store(&running,1);
+    if(pthread_create(&thread,NULL,worker,NULL)) {
+        atomic_store(&running,0);atomic_store(&state,-1);(*env)->DeleteGlobalRef(env,service_ref);service_ref=NULL;return -3;
+    }
+    joinable=1;return 0;
 }
-
-JNIEXPORT void JNICALL
-Java_com_kanki_tunnel_KankiNative_nativeStop(JNIEnv *env, jclass cls) {
-    (void)env; (void)cls;
-    g_running = 0;
-    if (g_joinable) { pthread_join(g_thread, NULL); g_joinable = 0; }
+JNIEXPORT void JNICALL Java_com_kanki_tunnel_KankiNative_nativeStop(JNIEnv *env,jclass cls) {
+    (void)cls;atomic_store(&running,0);if(joinable){pthread_join(thread,NULL);joinable=0;}
+    if(service_ref){(*env)->DeleteGlobalRef(env,service_ref);service_ref=NULL;}
 }
-
-JNIEXPORT jboolean JNICALL
-Java_com_kanki_tunnel_KankiNative_nativeRunning(JNIEnv *env, jclass cls) {
-    (void)env; (void)cls;
-    return g_running ? JNI_TRUE : JNI_FALSE;
+JNIEXPORT jboolean JNICALL Java_com_kanki_tunnel_KankiNative_nativeRunning(JNIEnv *env,jclass cls){(void)env;(void)cls;return atomic_load(&running)?JNI_TRUE:JNI_FALSE;}
+JNIEXPORT jlongArray JNICALL Java_com_kanki_tunnel_KankiNative_nativeStats(JNIEnv *env,jclass cls){
+    (void)cls;jlong v[4]={atomic_load(&state),atomic_load(&rtt),atomic_load(&rx_bytes),atomic_load(&tx_bytes)};
+    jlongArray a=(*env)->NewLongArray(env,4);if(a)(*env)->SetLongArrayRegion(env,a,0,4,v);return a;
 }

@@ -1,0 +1,12 @@
+[Unit]
+Description=KANKI IPv4 forwarding and NAT
+After=kanki-vpnd.service network-online.target
+Requires=kanki-vpnd.service
+PartOf=kanki-vpnd.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/kanki/deploy/wait-gateway.sh
+ExecStop=/opt/kanki/deploy/gateway.sh stop
+[Install]
+WantedBy=multi-user.target

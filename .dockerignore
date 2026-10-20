@@ -1,0 +1,12 @@
+.git
+**/__pycache__
+**/*.pyc
+**/.gradle
+**/.cxx
+**/build
+bin
+artifacts
+server/kanki-vpnd
+**/*.sqlite3*
+**/*.conf
+tests/tools/kanki-vpn-client

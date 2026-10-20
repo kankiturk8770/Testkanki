@@ -6,7 +6,7 @@
 set -euo pipefail
 PREFIX=${1:-$HOME/openssl-android}
 ABI=${2:-arm64-v8a}
-VER=${OPENSSL_VERSION:-3.0.15}
+VER=${OPENSSL_VERSION:-3.5.4}
 API=26                                   # = minSdk
 : "${ANDROID_NDK_ROOT:?set ANDROID_NDK_ROOT to your NDK directory}"
 case "$ABI" in
@@ -21,8 +21,13 @@ export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin:$PATH"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-$VER/openssl-$VER.tar.gz" \
-    | tar xz -C "$WORK"
+ARCHIVE="openssl-$VER.tar.gz"
+URL="https://github.com/openssl/openssl/releases/download/openssl-$VER/$ARCHIVE"
+curl -fsSL --retry 2 "$URL" -o "$WORK/$ARCHIVE"
+EXPECTED=$(curl -fsSL --retry 2 "$URL.sha256" | awk '{print $1}')
+[[ $EXPECTED =~ ^[a-fA-F0-9]{64}$ ]] || { echo 'Invalid upstream checksum' >&2; exit 1; }
+printf '%s  %s\n' "$EXPECTED" "$WORK/$ARCHIVE" | sha256sum -c -
+tar xzf "$WORK/$ARCHIVE" -C "$WORK"
 cd "$WORK/openssl-$VER"
 ./Configure "$TARGET" -D__ANDROID_API__=$API no-shared no-tests -fPIC \
     --prefix="$PREFIX" --libdir=lib

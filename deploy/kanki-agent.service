@@ -1,0 +1,20 @@
+[Unit]
+Description=KANKI node lease and quota agent
+After=network-online.target
+Wants=network-online.target
+Before=kanki-vpnd.service
+[Service]
+User=kanki
+Group=kanki
+EnvironmentFile=/etc/kanki-node.env
+ExecStart=/usr/bin/python3 /opt/kanki/agent/kanki_agent.py
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/etc/kanki /var/lib/kanki
+PrivateTmp=yes
+UMask=0027
+[Install]
+WantedBy=multi-user.target

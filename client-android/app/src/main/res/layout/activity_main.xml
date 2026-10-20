@@ -1,46 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical"
-    android:padding="20dp"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent">
-
-    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-        android:text="KANKI Tunnel" android:textSize="24sp" android:textStyle="bold"
-        android:layout_marginBottom="16dp"/>
-
-    <EditText android:id="@+id/etServer" android:layout_width="match_parent"
-        android:layout_height="wrap_content" android:hint="Server IP / host"
-        android:inputType="textUri"/>
-    <EditText android:id="@+id/etPort" android:layout_width="match_parent"
-        android:layout_height="wrap_content" android:hint="Server port (4000)"
-        android:inputType="number"/>
-    <EditText android:id="@+id/etLocal" android:layout_width="match_parent"
-        android:layout_height="wrap_content" android:hint="Local listen port (5000)"
-        android:inputType="number"/>
-    <EditText android:id="@+id/etKey" android:layout_width="match_parent"
-        android:layout_height="wrap_content" android:hint="PSK — 64 hex chars"
-        android:inputType="textPassword"/>
-
-    <TextView android:id="@+id/tvRepeat" android:layout_width="wrap_content"
-        android:layout_height="wrap_content" android:layout_marginTop="12dp"
-        android:text="Repeat: 4x"/>
-    <SeekBar android:id="@+id/sbRepeat" android:layout_width="match_parent"
-        android:layout_height="wrap_content"/>
-
-    <EditText android:id="@+id/etFecK" android:layout_width="match_parent"
-        android:layout_height="wrap_content" android:hint="FEC block size k (8)"
-        android:inputType="number"/>
-    <EditText android:id="@+id/etJitter" android:layout_width="match_parent"
-        android:layout_height="wrap_content" android:hint="Jitter µs (1500, 0 = off)"
-        android:inputType="number"/>
-    <CheckBox android:id="@+id/cbFec" android:layout_width="wrap_content"
-        android:layout_height="wrap_content" android:text="FEC enabled" android:checked="true"/>
-    <CheckBox android:id="@+id/cbAutotune" android:layout_width="wrap_content"
-        android:layout_height="wrap_content" android:text="Auto-tune repeat (3–10)"/>
-
-    <Button android:id="@+id/btnToggle" android:layout_width="match_parent"
-        android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="Start"/>
-    <TextView android:id="@+id/tvStatus" android:layout_width="wrap_content"
-        android:layout_height="wrap_content" android:layout_marginTop="12dp" android:text="○ Idle"/>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:background="@drawable/screen">
+<LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="22dp" android:importantForAutofill="noExcludeDescendants">
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="◈ KANKI" android:textColor="#70EAC4" android:textSize="32sp" android:textStyle="bold" android:letterSpacing="0.14"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="YOUR CONNECTION. REINFORCED." android:textColor="#93AAC2" android:textSize="12sp" android:letterSpacing="0.18" android:layout_marginBottom="24dp"/>
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="@drawable/card" android:gravity="center" android:layout_marginBottom="20dp">
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="◎" android:textColor="#70EAC4" android:textSize="66sp"/>
+<TextView android:id="@+id/tvStatus" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:text="○ آماده اتصال" android:textColor="#E4ECF7" android:textSize="16sp"/>
+<TextView android:id="@+id/tvTraffic" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:text="↓ 0 MiB     ↑ 0 MiB" android:textColor="#93AAC2" android:padding="12dp"/>
+<Button android:id="@+id/btnToggle" android:layout_width="match_parent" android:layout_height="58dp" android:text="اتصال امن" android:textColor="#092F29" android:backgroundTint="#70EAC4"/>
 </LinearLayout>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="01 / SUBSCRIPTION" android:textSize="11sp" android:textColor="#70EAC4" android:layout_marginBottom="12dp"/>
+<EditText android:id="@+id/etSubscription" style="@style/KankiField" android:hint="https://vpn.example.com/sub/…" android:inputType="textUri" android:importantForAutofill="no"/>
+<Button android:id="@+id/btnImport" android:layout_width="match_parent" android:layout_height="48dp" android:text="دریافت اشتراک و انتخاب دستگاه"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="02 / ROUTING" android:textSize="11sp" android:textColor="#70EAC4" android:layout_marginTop="24dp" android:layout_marginBottom="12dp"/>
+<Spinner android:id="@+id/mode" android:layout_width="match_parent" android:layout_height="52dp" android:background="@drawable/field" android:padding="8dp"/>
+<Button android:id="@+id/btnGames" android:layout_width="match_parent" android:layout_height="48dp" android:text="انتخاب بازی‌ها و برنامه‌های ورود"/>
+<TextView android:id="@+id/tvGames" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#93AAC2" android:textSize="12sp" android:layout_marginBottom="16dp"/>
+<Button android:id="@+id/btnAdvanced" android:layout_width="match_parent" android:layout_height="48dp" android:text="تنظیمات دستی (پیشرفته) ▾"/>
+<LinearLayout android:id="@+id/advanced" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:visibility="gone">
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="03 / CONNECTION PROFILE" android:textSize="11sp" android:textColor="#70EAC4" android:layout_marginTop="12dp" android:layout_marginBottom="12dp"/>
+<EditText android:id="@+id/etServer" style="@style/KankiField" android:hint="Server IPv4 / hostname" android:inputType="textUri"/>
+<EditText android:id="@+id/etPort" style="@style/KankiField" android:hint="UDP port · from subscription" android:inputType="number"/>
+<EditText android:id="@+id/etKey" style="@style/KankiField" android:hint="Private key · 64 hex" android:inputType="textPassword" android:importantForAutofill="no"/>
+<EditText android:id="@+id/etIp" style="@style/KankiField" android:hint="Tunnel IPv4 · assigned by panel" android:inputType="text"/>
+<EditText android:id="@+id/etDns" style="@style/KankiField" android:hint="DNS IPv4" android:text="1.1.1.1" android:inputType="text"/>
+<EditText android:id="@+id/etMtu" style="@style/KankiField" android:hint="MTU · 576–1400" android:text="1280" android:inputType="number"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="04 / RESILIENCE ENGINE" android:textSize="11sp" android:textColor="#70EAC4" android:layout_marginTop="16dp" android:layout_marginBottom="12dp"/>
+<TextView android:id="@+id/tvRepeat" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Repeat · 4×" android:textColor="#E4ECF7"/>
+<SeekBar android:id="@+id/sbRepeat" android:layout_width="match_parent" android:layout_height="48dp"/>
+<EditText android:id="@+id/etFecK" style="@style/KankiField" android:hint="FEC k · 2–16" android:text="8" android:inputType="number"/>
+<EditText android:id="@+id/etJitter" style="@style/KankiField" android:hint="Jitter µs · 0–100000" android:text="0" android:inputType="number"/>
+<CheckBox android:id="@+id/cbFec" android:layout_width="match_parent" android:layout_height="48dp" android:text="XOR FEC recovery" android:checked="true"/>
+<CheckBox android:id="@+id/cbAutotune" android:layout_width="match_parent" android:layout_height="48dp" android:text="Adaptive repeat · 3–10×" android:checked="true"/>
+</LinearLayout>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="IPv4 VPN · IPv6 مسدود می‌شود. در Gaming Smart فقط برنامه‌های انتخابی و سرویس‌های Google Play تونل می‌شوند. برای ورود با مرورگر، مرورگر را هم انتخاب کنید." android:textColor="#93AAC2" android:textSize="12sp" android:paddingTop="16dp" android:paddingBottom="24dp"/>
+</LinearLayout></ScrollView>

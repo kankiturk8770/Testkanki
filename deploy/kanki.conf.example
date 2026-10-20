@@ -1,0 +1,6 @@
+tun kanki0
+address 10.66.0.1/16
+mtu 1280
+port udp 4000 name=Gaming repeat=4 fec_k=8 fec=1 autotune=1 jitter=0
+# BEGIN KANKI ADMIN USERS
+# END KANKI ADMIN USERS

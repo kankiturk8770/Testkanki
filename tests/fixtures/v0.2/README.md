@@ -1,0 +1,1 @@
+Unmodified protocol headers extracted from the user's original ZIP. These are regression fixtures only. Production builds use `server/` or its byte-identical Android copies. The fixture intentionally retains the original defects to verify compatibility.

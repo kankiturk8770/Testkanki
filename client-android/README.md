@@ -1,35 +1,7 @@
-# KANKI Tunnel — Android app
+# KANKI Android 0.4.1
 
-Android client for the KANKI protocol (see kanki-core.zip / SPEC.md).
-UI: server, ports, PSK, repeat slider (3–10), FEC toggle, auto-tune toggle.
-Runs the same C core as the desktop client on a native thread inside a
-foreground service — the tunnel survives screen-off.
+Android 8+ ARM64, compile/target SDK 34, JDK 17, NDK 26.3.11579264. Build OpenSSL for Android with `build-openssl.sh PREFIX arm64-v8a`, then `./gradlew assembleDebug assembleDebugAndroidTest lintDebug -POPENSSL_ROOT=PREFIX`.
 
-## How it works
+The app imports version-1 KANKI HTTPS subscriptions, supports full-device IPv4 VPN and selected-app Gaming Smart. Server, port and key come from the subscription; manual settings are under "advanced". It does not import Xray subscriptions. IPv6 is captured and dropped. See `../docs/INSTALL_FA.md` for Google service routing, per-device profile selection, always-on/lockdown, build details and instrumentation commands.
 
-Your game/app talks plain UDP to `127.0.0.1:<localPort>`. The app tunnels it
-to the server with multiplication + FEC + AES-256-GCM. No VpnService needed
-for apps that let you set a custom server address. For system-wide capture,
-extend this project with a VpnService that forwards to 127.0.0.1:<localPort>.
-
-## Build
-
-1. Build a static OpenSSL (libcrypto) for Android once (needs NDK 26.3.11579264):
-   ```
-   ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/26.3.11579264 ./build-openssl.sh $HOME/openssl-android arm64-v8a
-   ```
-2. Build the APK (or open this folder in Android Studio and add
-   `OPENSSL_ROOT=/home/you/openssl-android` to `gradle.properties`):
-   ```
-   ./gradlew assembleDebug -POPENSSL_ROOT=$HOME/openssl-android
-   ```
-   The APK is built for arm64-v8a (the ABI OpenSSL was built for).
-
-3. Install: `adb install app/build/outputs/apk/debug/app-debug.apk`
-
-## Notes
-
-- Get the PSK from your server setup: `openssl rand -hex 32` (same both sides).
-- Fake-TCP mode is Linux-server-side (needs root); Android uses UDP mode.
-  On rooted devices the same core supports it — left as an exercise flag.
-- Tested core: 50/50 packets through 50% loss (repeat=10 + FEC).
+Java owns TUN; native shutdown joins the worker before Java closes its descriptor. Native status becomes connected only after an authenticated PONG. Transport sockets are protected and server DNS is resolved over an underlying non-VPN Network. Secrets are kept in memory; package selections are saved. Three instrumentation tests passed on AOSP API 30 x86_64, including a real Linux-server TUN/UDP/DNS/stop test. Physical ARM64 phone, Gaming/Google login, private DNS and network handover remain unverified. Use `-PKANKI_ABI=x86_64` with matching OpenSSL to build the emulator ABI.

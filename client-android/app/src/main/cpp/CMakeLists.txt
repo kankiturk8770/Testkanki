@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(kanki C)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # OpenSSL for Android: build once with https://github.com/openssl/openssl
 # (./Configure android-arm64) and point OPENSSL_ROOT at the install prefix,
@@ -15,6 +17,5 @@ if(OPENSSL_ROOT)
     # static libcrypto (build-openssl.sh) -> nothing extra to package in the APK
     target_link_libraries(kanki ${OPENSSL_ROOT}/lib/libcrypto.a log)
 else()
-    # fallback: expect libcrypto on the default search path
-    target_link_libraries(kanki crypto log)
+    message(FATAL_ERROR "Build OpenSSL for the Android ABI and pass -POPENSSL_ROOT=...")
 endif()

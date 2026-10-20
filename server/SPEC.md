@@ -17,29 +17,29 @@ Not based on any known protocol. Single C codebase: Linux server + Android clien
 
 ## 2. Wire format
 
-Everything after the first byte is AEAD-encrypted (AES-256-GCM). There is no
-plaintext header except a 1-byte key-id used to find the session key.
+Only the key-id and the random GCM IV are sent in clear; everything else is
+AES-256-GCM ciphertext.
 
 ```
-+----------+-------------------------------+--------+
-| keyid(1) |  AES-256-GCM ciphertext ...   |tag(16) |
-+----------+-------------------------------+--------+
++----------+----------+-------------------------------+--------+
+| keyid(1) |  iv(12)  |  AES-256-GCM ciphertext ...   |tag(16) |
++----------+----------+-------------------------------+--------+
 ```
 
 Plaintext (before encryption), variable length:
 
 ```
-nonce(12) | ver(1) | flags(1) | seq(8) | fec_block(4) | fec_idx(1) |
-fec_k(1)  | payload_len(2) | payload | random_padding(0..48)
+ver(1) | flags(1) | seq(8) | fec_block(4) | fec_idx(1) | fec_k(1) |
+payload_len(2) | payload | random_padding(0..48)
 ```
 
 - `keyid`   : 1-byte key selector, rotated every epoch, derived via HKDF.
-- `nonce`   : random per packet (inside AEAD, so no plaintext repetition ever).
+- `iv`      : fresh random 96-bit IV per copy, so duplicates never share ciphertext.
 - `seq`     : global 64-bit sequence, for dedup of multiplied copies.
 - `fec_*`   : FEC block id, index inside block (0xFF = parity shard), block size.
 - `flags`   : bit0 = DATA, bit1 = FEC_PARITY, bit2 = CONTROL, bit3 = TAIL
               (TAIL => send at max multiplication regardless of config).
-- Padding length is random per copy; AAD = keyid.
+- Padding is random bytes of random length per copy; AAD = keyid + iv.
 
 ## 3. Packet multiplication (3–10x)
 
@@ -82,10 +82,9 @@ fec_k(1)  | payload_len(2) | payload | random_padding(0..48)
 
 ## 7. Roles
 
-- **Server (Linux)**: `kanki-server --listen :4000 --target 127.0.0.1:27015`
-  Decapsulates and forwards to the game/app server; replies are encapsulated back.
-- **Client (Android/Linux)**: `kanki-client --listen 127.0.0.1:5000 --server x.x.x.x:4000`
-  Local app talks plain UDP to 127.0.0.1:5000; tunnel does the rest.
+- **Server (Linux)**: `kanki-vpnd` — multi-user IPv4 VPN. Each device has its own
+  PSK and tunnel IP; decrypted IP packets go to a TUN device and out through NAT.
+- **Client (Android)**: `VpnService` TUN <-> the same C core via JNI.
 
 ## 8. v0.2 additions
 

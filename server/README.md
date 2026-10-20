@@ -1,77 +1,38 @@
-# KANKI — private anti-loss gaming tunnel
+# KANKI VPN core (`kanki-vpnd`)
 
-Tested: **50/50 packets delivered through a link dropping 50% of all packets**
-(repeat=10 + FEC, loopback lab with lossy proxy).
-
-## Build (Linux server / desktop client)
-
-```
-sudo apt install libssl-dev
-make
-```
-
-## Run
-
-Generate a shared key (same on both sides):
+Multi-user IPv4 VPN server. Every device slot has its own key and tunnel IP;
+every `port` line is a listener with its own repeat / FEC / jitter profile.
+Install it with the one-line installer (see `../README.md`); the panel writes
+`/etc/kanki/kanki.conf` and the core picks up changes to users, ports and MTU
+by itself within about a second.
 
 ```
-openssl rand -hex 32
+make            # needs libssl-dev
+./kanki-vpnd --config /etc/kanki/kanki.conf --status-file /var/lib/kanki/status.txt
+./kanki-vpnd --config FILE --check-config     # validate without opening TUN
 ```
 
-Server (on your VPS, in front of the game/app server):
+Config:
 
 ```
-./kanki-server --listen :4000 --target 127.0.0.1:27015 --key <64hex> --repeat 6
+tun kanki0
+address 10.66.0.1/16
+mtu 1280
+port udp 4000 repeat=4 fec_k=8 fec=1 autotune=1 jitter=0
+user NAME KEYHEX 10.66.0.2 - group=ACCOUNT quota=BYTES expires=UNIX_TIME
 ```
 
-Client (point your game/app at 127.0.0.1:5000):
+Changing `tun` or `address` needs a restart. Both machines need a roughly correct
+clock (NTP): keys rotate every 10 minutes; ±10 minutes of skew is tolerated.
 
-```
-./kanki-client --listen 127.0.0.1:5000 --server YOUR_VPS:4000 --key <64hex> --repeat 6
-```
-
-Both machines need a roughly correct clock (NTP): keys rotate every 10 minutes
-from wall-clock time; up to ±10 minutes of skew is tolerated.
-
-### Fake-TCP mode (`--faketcp`, root)
-
-Use `--faketcp` on **both** sides. The kernel does not know about the fake
-stream and answers it with TCP RSTs; drop them so middleboxes keep the flow:
-
-```
-# server (listen port 4000)
-iptables -A OUTPUT -p tcp --sport 4000 --tcp-flags RST RST -j DROP
-# client (any source port it picks, 40000-59999)
-iptables -A OUTPUT -p tcp -d YOUR_VPS --dport 4000 --tcp-flags RST RST -j DROP
-```
-
-## Tuning
-
-| Flag | Range | Default | Meaning |
+| Option | Range | Default | Meaning |
 |---|---|---|---|
-| `--repeat` | 3–10 | 4 | copies of every packet (loss immunity vs. bandwidth) |
-| `--fec-k` | 2–16 | 8 | data shards per FEC block (+1 parity) |
-| `--no-fec` | — | off | disable FEC, multiplication only |
-| `--jitter` | µs | 1500 | max inter-copy jitter (0 = back-to-back) |
+| `repeat` | 3–10 | 4 | copies of every packet (loss immunity vs. bandwidth) |
+| `fec_k` | 2–16 | 8 | data shards per FEC block (+1 parity) |
+| `fec` | 0/1 | 1 | XOR FEC recovery |
+| `autotune` | 0/1 | 1 | adapt repeat to measured loss |
+| `jitter` | µs | 0 | max inter-copy jitter |
 
-Rules of thumb:
-- Slightly lossy Wi-Fi (1–5%): `--repeat 3`, FEC on.
-- Bad mobile link (10–30%): `--repeat 6`, FEC on.
-- Disaster link (30–60%): `--repeat 10`, `--fec-k 12`.
-- Bandwidth cost ≈ repeat × (1 + 1/k). repeat=10,k=8 → ~11x raw traffic.
-  For gaming tick traffic (few KB/s) this is fine; don't torrent through it.
-
-## Android client
-
-The same `kanki-client.c` core compiles with the NDK (`make android`), or wrap it:
-1. Android Studio project → JNI shim calling `kanki_client_main()`.
-2. Run as a `VpnService`-less local forwarder, or via Termux directly:
-   ```
-   pkg install clang openssl && make kanki-client
-   ./kanki-client --listen 127.0.0.1:5000 --server VPS:4000 --key <hex>
-   ```
-
-## Protocol details
-
-See SPEC.md — AES-256-GCM, HKDF epoch rotation, per-copy re-encryption,
-random padding, timing jitter, XOR-FEC with tail flush.
+Bandwidth cost ≈ repeat × (1 + 1/k). Fine for game tick traffic, not for bulk
+downloads. `port faketcp N` carries the tunnel inside crafted TCP segments
+(needs CAP_NET_RAW, Linux clients only). Protocol details: `SPEC.md`.
