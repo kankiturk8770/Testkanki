@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/@tgcloud/cli/schema/tgcloud.json",
+  // Mini App: the owner's "precise timer" setup page (plain HTML, no build step)
+  "static": {
+    "source": "webapp"
+  }
+}

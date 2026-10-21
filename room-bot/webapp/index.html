@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>زمان‌بندی دقیق</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root { --bg: #0b0d12; --card: #151922; --line: #262c3a; --text: #f2f4f8; --sub: #98a2b3; --accent: #ffb020; --ok: #2ee58c; --bad: #ff5a6a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text); font: 15px/1.7 Tahoma, sans-serif; }
+  h1 { font-size: 1.2rem; margin: 4px 0 4px; }
+  p { margin: 6px 0; color: var(--sub); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin: 12px 0; }
+  .status { display: flex; align-items: center; gap: 10px; font-weight: bold; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--sub); flex: none; }
+  .ok .dot { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+  .bad .dot { background: var(--bad); }
+  ol { padding-inline-start: 20px; margin: 6px 0; } li { margin: 8px 0; }
+  .field { direction: ltr; text-align: left; background: #0f1219; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: 12px/1.5 monospace;
+    word-break: break-all; max-height: 90px; overflow: auto; margin: 6px 0; }
+  button { width: 100%; border: 0; border-radius: 10px; padding: 10px; font: bold 14px Tahoma, sans-serif; background: var(--accent); color: #1a1000; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  b.k { color: var(--accent); }
+  small { color: var(--sub); }
+</style>
+</head>
+<body>
+<h1>⏰ زمان‌بندی دقیق</h1>
+<p>تلگرام خودش ربات رو سر ساعت بیدار نمی‌کنه؛ یه سرویس رایگان دقیقه‌ای یه بار ربات رو صدا می‌زنه تا پست‌های زمان‌بندی‌شده و قرعه‌کشی‌ها دقیق سر وقت انجام بشن.</p>
+
+<div class="card status" id="status"><span class="dot"></span><span id="status-text">در حال بررسی…</span></div>
+
+<div class="card">
+  <ol>
+    <li>برو به <b class="k">cron-job.org</b> و رایگان ثبت‌نام کن.
+      <button class="ghost" id="open-site">باز کردن cron-job.org</button></li>
+    <li><b>CREATE CRONJOB</b> رو بزن. تو قسمت <b>URL</b> اینو بذار:
+      <div class="field" id="url"></div><button id="copy-url">کپی آدرس</button></li>
+    <li>زمان اجرا: <b>Every 1 minute</b> (هر دقیقه).</li>
+    <li>تب <b>ADVANCED</b>: Request method رو <b>POST</b> کن، و تو <b>Headers</b> دو تا اضافه کن:
+      <div class="field">Content-Type: application/json</div>
+      <div class="field" id="auth"></div><button id="copy-auth">کپی مقدار Authorization</button>
+      <small>اسم هدر: Authorization — مقدارش همینیه که کپی کردی.</small><br>
+      <small>تو Request body هم بنویس: {}</small></li>
+    <li><b>CREATE</b> رو بزن. یه دقیقه بعد بالای این صفحه سبز میشه ✅</li>
+  </ol>
+  <small>⚠️ مقدار Authorization رو به کسی نده.</small>
+</div>
+
+<script>
+  const tg = window.Telegram?.WebApp;
+  tg?.ready(); tg?.expand();
+  const $ = (s) => document.querySelector(s);
+  const url = location.origin + "/api/tick";
+  const auth = "TMA " + btoa(tg?.initData || "");
+  $("#url").textContent = url;
+  $("#auth").textContent = "Authorization: " + auth;
+  const copy = async (text, b) => {
+    try { await navigator.clipboard.writeText(text); } catch {
+      const t = document.createElement("textarea"); t.value = text; document.body.append(t); t.select(); document.execCommand("copy"); t.remove();
+    }
+    const old = b.textContent; b.textContent = "✅ کپی شد"; setTimeout(() => (b.textContent = old), 1500);
+    tg?.HapticFeedback?.impactOccurred("light");
+  };
+  $("#copy-url").onclick = (e) => copy(url, e.target);
+  $("#copy-auth").onclick = (e) => copy(auth, e.target);
+  $("#open-site").onclick = () => (tg?.openLink ? tg.openLink("https://console.cron-job.org/signup") : open("https://console.cron-job.org/signup"));
+  function check() {
+    if (!tg?.Serverless) return show(false, "این صفحه رو از داخل ربات باز کن");
+    tg.Serverless.call("cronInfo", {}, (err, r) => {
+      if (err) return show(false, err.message);
+      show(r.working, r.working ? `فعاله ✅ آخرین بار: ${r.seen}` : r.seen ? `قطع شده؛ آخرین بار: ${r.seen}` : "هنوز وصل نشده");
+    });
+  }
+  function show(ok, text) {
+    $("#status").className = "card status " + (ok ? "ok" : "bad");
+    $("#status-text").textContent = text;
+  }
+  check();
+  setInterval(check, 20000);
+</script>
+</body>
+</html>
