@@ -16,24 +16,24 @@
 
 <header class="top">
   <div class="brand"><span class="logo">K</span><b>KANKI</b><i>MUSIC</i></div>
-  <button class="icon-btn" id="theme-btn" title="تم">🎨</button>
+  <button class="icon-btn" id="theme-btn" title="تم"><i data-i="palette"></i></button>
 </header>
 
 <main id="views">
   <!-- search -->
   <section class="view active" id="v-search">
     <form id="search-form" class="searchbar glass">
+      <i data-i="search" class="muted"></i>
       <input id="q" type="search" placeholder="اسم آهنگ، خواننده یا یه تیکه از متن…" autocomplete="off" enterkeyhint="search">
-      <button type="submit" class="gold-btn" aria-label="جستجو">جستجو</button>
+      <button type="submit" class="gold-btn">جستجو</button>
     </form>
     <div class="chips" id="search-chips">
       <button class="chip on" data-suffix="">همه</button>
       <button class="chip" data-suffix=" remix">ریمیکس</button>
       <button class="chip" data-suffix=" live">لایو</button>
-      <button class="chip" data-suffix=" cover">کاور</button>
       <button class="chip" data-suffix=" slowed reverb">اسلو</button>
     </div>
-    <div id="search-results" class="list"><p class="empty">هرچی دنبالشی بنویس؛ از یوتیوب، رادیوجوان و ساندکلاد پیدا می‌کنم 🎵</p></div>
+    <div id="search-results" class="list"><p class="empty">اسم آهنگ رو بنویس 🎵</p></div>
   </section>
 
   <!-- listen -->
@@ -41,17 +41,17 @@
     <div class="listen-wrap">
       <button id="listen-btn" class="orb">
         <span class="halo"></span><span class="halo h2"></span>
-        <span class="orb-core"><span id="listen-label">🎧<br>گوش بده</span></span>
+        <span class="orb-core"><i data-i="mic" class="xl"></i><span id="listen-label">گوش بده</span></span>
       </button>
       <p id="listen-status" class="muted">بزن و گوشی رو نزدیک صدای آهنگ بگیر</p>
       <div class="seg" id="listen-mode">
-        <button class="on" data-mode="song">🎵 آهنگ پخش میشه</button>
-        <button data-mode="sing">🎤 خودم می‌خونم</button>
+        <button class="on" data-mode="song">آهنگ پخش میشه</button>
+        <button data-mode="sing">خودم می‌خونم</button>
       </div>
       <select id="sing-lang" class="pill" hidden>
         <option value="fa-IR">فارسی</option><option value="en-US">English</option><option value="tr-TR">Türkçe</option><option value="ar-SA">العربية</option>
       </select>
-      <label class="link-btn">📁 انتخاب فایل صوتی/ویدیویی<input type="file" id="listen-file" accept="audio/*,video/*" hidden></label>
+      <label class="link-btn"><i data-i="folder"></i> انتخاب فایل<input type="file" id="listen-file" accept="audio/*,video/*" hidden></label>
     </div>
     <div id="listen-result"></div>
   </section>
@@ -59,18 +59,22 @@
   <!-- library -->
   <section class="view" id="v-library">
     <div id="lib-root">
-      <div class="head-row"><h2>کتابخانه</h2><button class="pill" id="new-pl">➕ پلی‌لیست</button></div>
+      <div class="head-row"><h2>کتابخانه</h2><button class="pill" id="new-pl"><i data-i="plus"></i> پلی‌لیست جدید</button></div>
       <div id="lib-cards" class="cards"></div>
     </div>
     <div id="lib-detail" hidden>
-      <div class="head-row">
-        <button class="pill" id="lib-back">→</button>
-        <h2 id="lib-title"></h2>
-        <span id="lib-actions"></span>
-      </div>
-      <div class="row gap">
-        <button class="gold-btn" id="lib-play">▶ پخش همه</button>
-        <button class="pill" id="lib-shuffle">🔀 تصادفی</button>
+      <div class="pl-hero glass">
+        <button class="icon-btn back" id="lib-back"><i data-i="back"></i></button>
+        <div class="mosaic big" id="lib-mosaic"></div>
+        <div class="pl-info">
+          <h2 id="lib-title"></h2>
+          <small id="lib-count" class="muted"></small>
+          <div class="row gap">
+            <button class="gold-btn" id="lib-play"><i data-i="play"></i> پخش</button>
+            <button class="pill" id="lib-shuffle"><i data-i="shuffle"></i></button>
+            <span id="lib-actions"></span>
+          </div>
+        </div>
       </div>
       <div id="lib-list" class="list"></div>
     </div>
@@ -78,52 +82,62 @@
 
   <!-- history -->
   <section class="view" id="v-history">
-    <div class="head-row"><h2>تاریخچه</h2><button class="pill" id="hist-clear">🗑 پاک کردن</button></div>
+    <div class="head-row"><h2>تاریخچه</h2><button class="pill" id="hist-clear"><i data-i="trash"></i> پاک کردن</button></div>
     <div class="chips" id="hist-chips">
       <button class="chip on" data-kind="">همه</button>
       <button class="chip" data-kind="search">جستجو</button>
-      <button class="chip" data-kind="recognize">تشخیص</button>
+      <button class="chip" data-kind="recognize">پیدا شده</button>
       <button class="chip" data-kind="play">پخش</button>
       <button class="chip" data-kind="download">دانلود</button>
-      <button class="chip" data-kind="edit">ویرایش</button>
     </div>
     <div id="hist-list" class="list"></div>
   </section>
 </main>
 
+<!-- "find the song of what I sent in the chat" -->
+<div id="rec-screen" class="rec-screen" hidden>
+  <div class="orb busy"><span class="halo"></span><span class="halo h2"></span><span class="orb-core"><i data-i="mic" class="xl"></i></span></div>
+  <h3 id="rec-title">دارم پیدا می‌کنم…</h3>
+  <p id="rec-sub" class="muted"></p>
+  <div class="row gap" id="rec-actions" hidden>
+    <button class="gold-btn" id="rec-retry">دوباره</button>
+    <button class="pill" id="rec-close">بستن</button>
+  </div>
+</div>
+
 <!-- mini player -->
 <div id="mini" class="mini glass" hidden>
   <img id="mini-cover" alt="">
   <div class="mini-meta"><b id="mini-title"></b><small id="mini-artist"></small></div>
-  <button id="mini-play" class="round sm">▶</button>
-  <button id="mini-next" class="icon-btn">⏭</button>
+  <button id="mini-play" class="round sm"><i data-i="play"></i></button>
+  <button id="mini-next" class="icon-btn"><i data-i="next"></i></button>
   <div class="mini-progress"><i id="mini-bar"></i></div>
 </div>
 
 <nav class="tabs glass">
-  <button data-view="v-search" class="on"><span>🔎</span>جستجو</button>
-  <button data-view="v-listen"><span>🎙</span>تشخیص</button>
-  <button data-view="v-library"><span>📚</span>کتابخانه</button>
-  <button data-view="v-history"><span>🕘</span>تاریخچه</button>
+  <button data-view="v-search" class="on"><i data-i="search"></i>جستجو</button>
+  <button data-view="v-listen"><i data-i="mic"></i>پیدا کن</button>
+  <button data-view="v-library"><i data-i="folder"></i>کتابخانه</button>
+  <button data-view="v-history"><i data-i="clock"></i>تاریخچه</button>
 </nav>
 
 <!-- full player -->
 <div id="player" class="sheet" hidden>
   <div class="sheet-head">
-    <button class="icon-btn" id="player-close">⌄</button>
+    <button class="icon-btn" id="player-close"><i data-i="down"></i></button>
     <small id="player-src"></small>
-    <button class="icon-btn" id="player-queue-btn" title="صف پخش">☰</button>
+    <button class="icon-btn" id="player-queue-btn" title="صف پخش"><i data-i="list"></i></button>
   </div>
 
   <div class="cover-wrap" id="cover-wrap">
     <img id="p-cover" alt="">
-    <canvas id="viz" width="600" height="120"></canvas>
-    <div class="loading" id="p-loading" hidden>⏳</div>
+    <div class="loading" id="p-loading" hidden><span class="spinner"></span><b id="p-loading-text"></b></div>
   </div>
 
   <div class="p-meta">
     <div class="p-text"><h3 id="p-title"></h3><p id="p-artist" class="muted"></p></div>
-    <button class="icon-btn big" id="p-like">🤍</button>
+    <div class="eqbars" id="eqbars"><i></i><i></i><i></i><i></i></div>
+    <button class="icon-btn big" id="p-like"><i data-i="heart"></i></button>
   </div>
 
   <div class="seek">
@@ -132,109 +146,46 @@
   </div>
 
   <div class="controls">
-    <button class="icon-btn" id="p-shuffle" title="تصادفی">🔀</button>
-    <button class="icon-btn" id="p-back10" title="۱۰ ثانیه عقب">↺</button>
-    <button class="icon-btn big" id="p-prev">⏮</button>
-    <button class="round" id="p-play">▶</button>
-    <button class="icon-btn big" id="p-next">⏭</button>
-    <button class="icon-btn" id="p-fwd10" title="۱۰ ثانیه جلو">↻</button>
-    <button class="icon-btn" id="p-repeat" title="تکرار">🔁</button>
+    <button class="icon-btn" id="p-mode" title="حالت پخش"><i data-i="repeat"></i></button>
+    <button class="icon-btn big" id="p-prev"><i data-i="prev"></i></button>
+    <button class="round" id="p-play"><i data-i="play"></i></button>
+    <button class="icon-btn big" id="p-next"><i data-i="next"></i></button>
+    <button class="icon-btn" id="vol-btn" title="صدا"><i data-i="volume"></i></button>
   </div>
-
-  <div class="volume glass">
-    <button class="icon-btn" id="vol-mute">🔊</button>
-    <input type="range" id="vol" min="0" max="150" value="100">
-    <span id="vol-val" class="muted">100</span>
+  <div class="volume" id="vol-row" hidden>
+    <i data-i="volume-low" class="muted"></i>
+    <input type="range" id="vol" min="0" max="100" value="100">
+    <i data-i="volume" class="muted"></i>
   </div>
 
   <div class="tools">
-    <button class="tool" data-panel="eq"><span>🎚</span>اکولایزر</button>
-    <button class="tool" data-panel="edit"><span>✂️</span>ویرایش</button>
-    <button class="tool" data-panel="send"><span>📩</span>ارسال</button>
-    <button class="tool" id="p-add"><span>➕</span>پلی‌لیست</button>
-    <button class="tool" id="p-remix"><span>🔁</span>ریمیکس</button>
-    <button class="tool" data-panel="more"><span>⚙️</span>بیشتر</button>
-  </div>
-
-  <div class="panel glass" id="panel-eq" hidden>
-    <h4>🎚 اکولایزر</h4>
-    <div class="chips wrap" id="eq-presets">
-      <button class="chip on" data-eq="flat">معمولی</button>
-      <button class="chip" data-eq="bass">باس</button>
-      <button class="chip" data-eq="vocal">وکال</button>
-      <button class="chip" data-eq="treble">زیر</button>
-      <button class="chip" data-eq="party">پارتی</button>
-    </div>
-    <div class="eq-bands">
-      <label>بم<input type="range" id="eq-low" min="-12" max="12" value="0" orient="vertical"></label>
-      <label>میانی<input type="range" id="eq-mid" min="-12" max="12" value="0" orient="vertical"></label>
-      <label>زیر<input type="range" id="eq-high" min="-12" max="12" value="0" orient="vertical"></label>
-    </div>
-  </div>
-
-  <div class="panel glass" id="panel-more" hidden>
-    <h4>⚙️ پخش</h4>
-    <div class="row gap wrap">
-      <span class="muted">سرعت:</span>
-      <div class="chips wrap" id="rate-chips">
-        <button class="chip" data-rate="0.75">0.75×</button><button class="chip on" data-rate="1">1×</button>
-        <button class="chip" data-rate="1.25">1.25×</button><button class="chip" data-rate="1.5">1.5×</button>
-      </div>
-    </div>
-    <div class="row gap wrap">
-      <span class="muted">تایمر خواب:</span>
-      <div class="chips wrap" id="sleep-chips">
-        <button class="chip on" data-sleep="0">خاموش</button><button class="chip" data-sleep="15">۱۵ دقیقه</button>
-        <button class="chip" data-sleep="30">۳۰ دقیقه</button><button class="chip" data-sleep="60">۱ ساعت</button>
-        <button class="chip" data-sleep="end">آخر آهنگ</button>
-      </div>
-    </div>
-    <label class="toggle"><input type="checkbox" id="crossfade"> محو شدن نرم بین آهنگ‌ها</label>
+    <button class="tool" data-panel="edit"><span><i data-i="scissors"></i></span>برش</button>
+    <button class="tool" data-panel="send"><span><i data-i="send"></i></span>ارسال به چت</button>
+    <button class="tool" id="p-add"><span><i data-i="list-plus"></i></span>پلی‌لیست</button>
+    <button class="tool" id="p-remix"><span><i data-i="disc"></i></span>ریمیکس‌ها</button>
   </div>
 
   <div class="panel glass" id="panel-edit" hidden>
-    <div class="seg" id="edit-mode">
-      <button class="on" data-mode="cut">✂️ برش</button>
-      <button data-mode="ringtone">🔔 رینگتون</button>
-      <button data-mode="fx">🎛 افکت</button>
-    </div>
     <div class="cut-bar" id="cut-bar"><div class="sel" id="cut-sel"></div><div class="head" id="cut-head"></div></div>
     <div class="cut-times">
       <div><small class="muted">شروع</small><b id="cut-a-t">0:00</b>
-        <div class="row"><button class="pill sm" data-nudge="a:-1">−</button><button class="pill sm" data-mark="a">📍</button><button class="pill sm" data-nudge="a:1">+</button></div></div>
+        <div class="row"><button class="pill sm" data-nudge="a:-1">−</button><button class="pill sm" data-mark="a" title="از همین لحظه"><i data-i="pin"></i></button><button class="pill sm" data-nudge="a:1">+</button></div></div>
       <div class="len"><small class="muted">طول</small><b id="cut-len">30s</b></div>
       <div><small class="muted">پایان</small><b id="cut-b-t">0:30</b>
-        <div class="row"><button class="pill sm" data-nudge="b:-1">−</button><button class="pill sm" data-mark="b">📍</button><button class="pill sm" data-nudge="b:1">+</button></div></div>
+        <div class="row"><button class="pill sm" data-nudge="b:-1">−</button><button class="pill sm" data-mark="b" title="تا همین لحظه"><i data-i="pin"></i></button><button class="pill sm" data-nudge="b:1">+</button></div></div>
     </div>
     <input type="range" id="cut-a" min="0" max="100" step="0.1" value="0">
     <input type="range" id="cut-b" min="0" max="100" step="0.1" value="30">
-    <div class="chips wrap" id="fx-chips" hidden>
-      <button class="chip on" data-fx="">بدون افکت</button>
-      <button class="chip" data-fx="slow">🐢 اسلو + ریورب</button>
-      <button class="chip" data-fx="fast">⚡ تند</button>
-      <button class="chip" data-fx="bass">🔊 باس</button>
-      <button class="chip" data-fx="8d">🎧 8D</button>
-      <button class="chip" data-fx="karaoke">🎤 بی‌کلام</button>
-      <button class="chip" data-fx="loud">📢 بلندتر</button>
-    </div>
-    <div class="row gap wrap">
-      <label class="toggle"><input type="checkbox" id="cut-fade" checked> فید</label>
-      <select id="cut-fmt" class="pill"><option value="audio">🎵 mp3</option><option value="voice">🎙 ویس</option></select>
-      <button class="pill" id="cut-whole">کل آهنگ</button>
-    </div>
     <div class="row gap">
-      <button class="pill grow" id="cut-preview">▶ گوش دادن</button>
-      <button class="gold-btn grow" id="cut-send">📩 بساز و بفرست</button>
+      <button class="pill grow" id="cut-preview"><i data-i="play"></i> گوش دادن</button>
+      <button class="gold-btn grow" id="cut-send"><i data-i="send"></i> بفرست تو چت</button>
     </div>
-    <p class="muted note" id="edit-status">پردازش روی گوشی خودت انجام میشه؛ نتیجه تو چت ربات میاد.</p>
+    <p class="muted note" id="edit-status"></p>
   </div>
 
   <div class="panel glass" id="panel-send" hidden>
-    <h4>🎧 آهنگ</h4>
     <div class="row gap wrap" id="send-audio"></div>
-    <h4>🎬 ویدیو</h4>
     <div class="row gap wrap" id="send-video"></div>
-    <div class="row gap"><button class="pill" data-send="voice:">🎙 به صورت ویس</button></div>
   </div>
 
   <div class="panel glass" id="panel-queue" hidden>

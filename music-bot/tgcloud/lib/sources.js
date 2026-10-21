@@ -196,6 +196,8 @@ export async function scSearch(query, limit) {
   const j = await scApi(`/search/tracks?q=${encodeURIComponent(query)}&limit=${limit + 6}`);
   return (j.collection || [])
     .filter((t) => t.policy !== 'BLOCK' && t.policy !== 'SNIP' && t.duration / 1000 <= MAX_DURATION)
+    // DRM uploads (only encrypted HLS) can never be downloaded: leave them out
+    .filter((t) => (t.media?.transcodings || []).some((x) => x.format?.protocol === 'hls' && /^(aac|mp3)/.test(x.preset || '')))
     .slice(0, limit)
     .map(scToTrack);
 }
@@ -272,6 +274,14 @@ export async function saavnSearch(query, limit) {
 }
 
 async function saavnAudio(track, kbps) {
+  if (!track.media) {
+    // tracks read back from the database don't carry the encrypted URL: look it up again
+    const id = track.key.split(':')[1];
+    const res = await fetch(`https://www.jiosaavn.com/api.php?__call=song.getDetails&pids=${id}&_format=json&_marker=0&api_version=4&ctx=web6dot0`, { headers: { 'User-Agent': UA } });
+    const j = await res.json().catch(() => ({}));
+    const song = j.songs?.[0] || j[id];
+    track = { ...track, media: song?.more_info?.encrypted_media_url || song?.encrypted_media_url, hq: (song?.more_info || song)?.['320kbps'] === 'true' };
+  }
   if (!track.media) throw new Error('saavn: link not found');
   const url = new TextDecoder().decode(desDecrypt(fromBase64(track.media), '38346591'));
   const q = kbps === '320' && track.hq ? '320' : kbps === '128' ? '96' : '160';
@@ -438,6 +448,104 @@ export async function fromUrl(url) {
   }
   const host = (url.match(/^https?:\/\/(?:www\.)?([^/]+)/) || [])[1] || 'link';
   return { key: `link:${url.slice(0, 300)}`, source: host, url, title: `لینک ${host}` };
+}
+
+// ---------------- links: Instagram / TikTok / YouTube -> song name + media ----------------
+
+const IG_UA = 'Googlebot/2.1 (+http://www.google.com/bot.html)'; // Instagram serves the full reel page to crawlers
+const unjson = (x) => { try { return JSON.parse(`"${x}"`); } catch { return x; } };
+const unhtml = (x) => String(x || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)));
+
+async function instagramInfo(url) {
+  const code = (url.match(/instagram\.com\/(?:[^/]+\/)?(?:reel|reels|p|tv)\/([\w-]+)/) || [])[1];
+  if (!code) return null;
+  const res = await fetch(`https://www.instagram.com/reel/${code}/`, { headers: { 'User-Agent': IG_UA } });
+  const page = await res.text();
+  const pick = (re) => { const m = page.match(re); return m ? unjson(m[1]) : null; };
+  const song = pick(/"song_name":"([^"]+)"/), artist = pick(/"artist_name":"([^"]+)"/);
+  const original = pick(/"original_audio_title":"([^"]+)"/);
+  const owner = pick(/"ig_artist":\{"username":"([^"]+)"/) || pick(/"username":"([^"]+)"/);
+  const caption = unhtml((page.match(/og:title" content="([^"]{0,200})/) || [])[1]);
+  return {
+    kind: 'instagram', id: code,
+    song: song ? { title: song, artist } : null,
+    // "Maviler - Tutsak (Slowed Reverb)" is a real song name; "Original audio" is not
+    hint: original && !/^original audio|^audio original|اصلی/i.test(original) ? original : null,
+    title: caption || `Instagram ${code}`, owner,
+    video: pick(/"video_versions":\[\{[^\]]*?"url":"([^"]+)"/),
+    thumb: pick(/"display_url":"([^"]+)"/) || unhtml((page.match(/og:image" content="([^"]+)"/) || [])[1]),
+  };
+}
+
+async function tiktokInfo(url) {
+  const res = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, { headers: { 'User-Agent': UA } });
+  const j = await res.json();
+  if (j.code !== 0 || !j.data) return null;
+  const d = j.data, m = d.music_info || {};
+  const real = m.title && !/original sound|оригинальный звук|son original|sonido original|اصلی/i.test(m.title);
+  return {
+    kind: 'tiktok', id: d.id, title: d.title || 'TikTok', owner: d.author?.unique_id,
+    song: real ? { title: m.title, artist: m.author || null } : null, hint: null,
+    video: d.hdplay || d.play, audio: d.music || m.play, thumb: d.cover,
+  };
+}
+
+/** A pasted link -> { kind, song?, hint?, title, video?, audio?, thumb } (null if unknown). */
+export async function linkInfo(url) {
+  try {
+    if (/instagram\.com\//.test(url)) return await instagramInfo(url);
+    if (/tiktok\.com\//.test(url)) return await tiktokInfo(url);
+  } catch (e) {
+    console.warn('link info', e.message);
+  }
+  return null;
+}
+
+/** Bytes of a link's video (Instagram / TikTok). */
+export async function linkVideo(info) {
+  if (!info?.video) throw new Error('ویدیوی این لینک پیدا نشد');
+  const res = await fetch(info.video, { headers: { 'User-Agent': UA } }); // the CDN refuses crawler agents
+  if (!res.ok) throw new Error(`video ${res.status}`);
+  return readBytes(res);
+}
+
+/** Bytes of a link's sound, for Shazam (TikTok has a separate audio file). */
+export async function linkSound(info) {
+  const url = info?.audio || info?.video;
+  if (!url) throw new Error('صدای این لینک پیدا نشد');
+  const res = await fetch(url, { headers: { 'User-Agent': UA } });
+  if (!res.ok) throw new Error(`media ${res.status}`);
+  return { bytes: await readBytes(res, 20 * 1024 * 1024), mime: info.audio ? 'audio/mpeg' : 'video/mp4' };
+}
+
+// ---------------- "send me this song": best downloadable version of a title ----------------
+
+/**
+ * want: { title, artist } (e.g. from Shazam or Instagram). Returns tracks, best first:
+ * same title & artist, original over remix/cover/live unless asked for, sources that serve full files first.
+ */
+export async function bestMatches(want, limit = 5) {
+  const title = cleanTitle(want.title) || want.title;
+  const q = `${want.artist || ''} ${title}`.trim();
+  const lists = await Promise.all([
+    safeList('rj', rjSearch(q, 5)), safeList('sc', scSearch(q, 6)), safeList('saavn', saavnSearch(q, 4)), safeList('yt', ytSearch(q, 5)),
+  ]);
+  const wantVersion = /remix|ریمیکس|slowed|sped|live|cover|lofi|acoustic/i.exec(want.title)?.[0]?.toLowerCase();
+  // YouTube serves only ~1 MB to servers unless a cobalt instance is set: pick it last
+  const ytUsable = !!(await getSetting('cobalt_url'));
+  const sourceRank = { radiojavan: 1, saavn: 0.9, soundcloud: 0.7, youtube: ytUsable ? 0.2 : -1.5 };
+  const scored = lists.flat().map((t) => {
+    let score = similarity(title, cleanTitle(t.title)) * 4;
+    if (want.artist) score += similarity(want.artist, `${t.artist || ''} ${t.title}`) * 2;
+    const version = /remix|ریمیکس|slowed|sped|live|cover|lofi|acoustic|karaoke|instrumental/i.exec(t.title)?.[0]?.toLowerCase();
+    if (version && version !== wantVersion) score -= 2;
+    if (wantVersion && version === wantVersion) score += 1.5;
+    score += sourceRank[t.source] || 0;
+    return { t, score };
+  });
+  const seen = new Set();
+  return scored.filter((x) => x.score >= 3).sort((a, b) => b.score - a.score)
+    .map((x) => x.t).filter((t) => !seen.has(t.key) && seen.add(t.key)).slice(0, limit);
 }
 
 /** Raw media of a link (Instagram reel, TikTok, …) for song recognition; needs cobalt. */

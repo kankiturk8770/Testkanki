@@ -1,5 +1,5 @@
 "use strict";
-// Kanki Music Mini App: player, library, history, recognition and an in-browser audio editor.
+// Kanki Music Mini App: player, library, history, recognition and a cutter.
 // Backend: the bot's Telegram Serverless endpoints (tgcloud/endpoints/*) via Telegram.WebApp.Serverless.call.
 const tg = window.Telegram?.WebApp;
 tg?.ready();
@@ -16,12 +16,51 @@ const fmt = (s) => {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = String(s % 60).padStart(2, "0");
   return h ? `${h}:${String(m).padStart(2, "0")}:${x}` : `${m}:${x}`;
 };
-const PLACEHOLDER = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#1a1406"/><text x="5" y="6.8" font-size="5" text-anchor="middle" fill="#ffc72c">♪</text></svg>');
 const haptic = (t = "light") => tg?.HapticFeedback?.impactOccurred(t);
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
+
+/* ---------------- icons (24×24 line icons) ---------------- */
+const ICONS = {
+  play: '<path d="M7 4.5v15l12-7.5z" fill="currentColor" stroke="none"/>',
+  pause: '<rect x="6" y="4.5" width="4" height="15" rx="1.2" fill="currentColor" stroke="none"/><rect x="14" y="4.5" width="4" height="15" rx="1.2" fill="currentColor" stroke="none"/>',
+  next: '<path d="M5 5l10 7-10 7z" fill="currentColor" stroke="none"/><path d="M19 5v14"/>',
+  prev: '<path d="M19 5L9 12l10 7z" fill="currentColor" stroke="none"/><path d="M5 5v14"/>',
+  repeat: '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>',
+  "repeat-one": '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/><path d="M11 10h1.5v5"/>',
+  shuffle: '<path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/>',
+  order: '<path d="M4 6h12"/><path d="M4 12h9"/><path d="M4 18h6"/><path d="M17 13l3 3-3 3"/><path d="M13 16h7"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+  mic: '<rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3.5"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M10 15.5a1.5 1.5 0 1 1-1.5-1.5H10V10.5l4-1v4.5"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.8 1.6-1.6 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5c0-4-4-7.4-9-7.4z"/><circle cx="7.5" cy="11" r="1.2" fill="currentColor"/><circle cx="10.5" cy="7.5" r="1.2" fill="currentColor"/><circle cx="15" cy="8" r="1.2" fill="currentColor"/>',
+  heart: '<path d="M12 20s-7.5-4.4-9.2-9.2C1.6 7.4 3.8 4.5 7 4.5c2 0 3.3 1.1 5 3 1.7-1.9 3-3 5-3 3.2 0 5.4 2.9 4.2 6.3C19.5 15.6 12 20 12 20z"/>',
+  "heart-on": '<path d="M12 20s-7.5-4.4-9.2-9.2C1.6 7.4 3.8 4.5 7 4.5c2 0 3.3 1.1 5 3 1.7-1.9 3-3 5-3 3.2 0 5.4 2.9 4.2 6.3C19.5 15.6 12 20 12 20z" fill="currentColor"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9"/><path d="M14.5 14.5L20 20"/><path d="M8.1 8.1L12 12"/>',
+  send: '<path d="M21.5 2.5L10.5 13.5"/><path d="M21.5 2.5l-7 19-4-8-8-4z"/>',
+  "list-plus": '<path d="M3 6h12"/><path d="M3 12h12"/><path d="M3 18h7"/><path d="M18 14v7"/><path d="M14.5 17.5h7"/>',
+  disc: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3a9 9 0 0 1 9 9"/><path d="M12 6.5a5.5 5.5 0 0 1 5.5 5.5"/>',
+  list: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><circle cx="3.5" cy="6" r="1" fill="currentColor"/><circle cx="3.5" cy="12" r="1" fill="currentColor"/><circle cx="3.5" cy="18" r="1" fill="currentColor"/>',
+  down: '<path d="M6 9l6 6 6-6"/>',
+  back: '<path d="M9 18l6-6-6-6"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  trash: '<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
+  pencil: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+  volume: '<path d="M4 9v6h4l5 4V5L8 9z" fill="currentColor"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/>',
+  "volume-low": '<path d="M4 9v6h4l5 4V5L8 9z" fill="currentColor"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/>',
+  pin: '<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+  music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
+  star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+};
+const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ""}</svg>`;
+const setIcon = (el, name) => { el.dataset.i = name; el.innerHTML = icon(name); };
+const drawIcons = (root = document) => root.querySelectorAll("i[data-i]").forEach((el) => setIcon(el, el.dataset.i));
+drawIcons();
+
+const PLACEHOLDER = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" fill="#141006"/><g transform="translate(12 12)" fill="none" stroke="#ffc72c" stroke-width="2" stroke-linecap="round">${ICONS.music}</g></svg>`);
 
 function toast(msg, ms = 2600) {
   const el = $("#toast");
@@ -37,7 +76,7 @@ function call(name, input = {}) {
     if (!tg?.Serverless) return reject(new Error("مینی‌اپ رو از داخل ربات باز کن"));
     tg.Serverless.call(name, input, (err, result) => {
       if (!err) return resolve(result);
-      reject(new Error(err.type === "UNAUTHORIZED" ? "مینی‌اپ رو از داخل ربات باز کن" : err.message || "خطا"));
+      reject(new Error(err.type === "UNAUTHORIZED" ? "مینی‌اپ رو از داخل ربات باز کن" : err.type === "ENDPOINT_ERROR" ? err.message : "ارتباط با سرور نشد؛ دوباره امتحان کن"));
     });
   });
 }
@@ -54,6 +93,24 @@ function bytesToB64(bytes) {
   return btoa(s);
 }
 
+/** A file the bot hands out in base64 parts (endpoint responses are capped at ~2 MB). */
+async function fetchParts(name, input, onProgress) {
+  const first = await call(name, { ...input, idx: 0 });
+  const parts = new Array(first.total);
+  parts[0] = b64ToBytes(first.data);
+  let done = 1;
+  onProgress?.(done, first.total);
+  const rest = [...Array(first.total).keys()].slice(1);
+  // three at a time: faster start, still light on the bot
+  for (let i = 0; i < rest.length; i += 3) {
+    await Promise.all(rest.slice(i, i + 3).map(async (idx) => {
+      parts[idx] = b64ToBytes((await call(name, { ...input, idx })).data);
+      onProgress?.(++done, first.total);
+    }));
+  }
+  return new Blob(parts, { type: first.mime });
+}
+
 /* ---------------- look ---------------- */
 const THEMES = ["gold", "violet", "cyber", "crimson", "mono"];
 function setTheme(t) {
@@ -62,8 +119,7 @@ function setTheme(t) {
 }
 setTheme(store.get("theme", "gold"));
 $("#theme-btn").onclick = () => {
-  const t = THEMES[(THEMES.indexOf(document.documentElement.dataset.theme) + 1) % THEMES.length];
-  setTheme(t);
+  setTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.theme) + 1) % THEMES.length]);
   haptic();
 };
 
@@ -74,7 +130,6 @@ function paint(el) {
 }
 document.addEventListener("input", (e) => e.target.type === "range" && paint(e.target));
 const paintAll = () => $$('input[type="range"]').forEach(paint);
-paintAll();
 
 /* ---------------- tabs ---------------- */
 function showView(id) {
@@ -86,7 +141,6 @@ function showView(id) {
 $$(".tabs button").forEach((b) => (b.onclick = () => { haptic(); showView(b.dataset.view); }));
 
 /* ---------------- track lists ---------------- */
-const SRC = { youtube: "YouTube", soundcloud: "SoundCloud", radiojavan: "RadioJavan", saavn: "Saavn" };
 function renderList(el, tracks, { emptyText = "چیزی نیست", onRemove } = {}) {
   if (!tracks.length) {
     el.innerHTML = `<p class="empty">${esc(emptyText)}</p>`;
@@ -97,8 +151,8 @@ function renderList(el, tracks, { emptyText = "چیزی نیست", onRemove } = 
     const row = document.createElement("div");
     row.className = "item" + (player.cur?.id === t.id ? " playing" : "");
     row.innerHTML = `<img loading="lazy" src="${esc(t.thumb || PLACEHOLDER)}" onerror="this.src='${PLACEHOLDER}'">
-      <div class="meta"><b>${esc(t.title)}</b><small>${esc(t.artist || "")}${t.duration ? " · " + fmt(t.duration) : ""}<span class="badge">${esc(SRC[t.source] || t.source || "")}</span></small></div>
-      ${onRemove ? '<button class="icon-btn more" title="حذف">✕</button>' : ""}`;
+      <div class="meta"><b>${esc(t.title)}</b><small>${esc(t.artist || "")}${t.duration ? " · " + fmt(t.duration) : ""}</small></div>
+      ${onRemove ? `<button class="icon-btn more" title="حذف">${icon("trash")}</button>` : ""}`;
     row.onclick = (e) => {
       if (e.target.closest(".more")) {
         e.stopPropagation();
@@ -117,9 +171,9 @@ let lastQuery = "";
 async function doSearch(q) {
   q = q.trim();
   if (!q) return;
-  lastQuery = q.replace(/ (remix|live|cover|slowed reverb)$/, "");
+  lastQuery = q.replace(/ (remix|live|slowed reverb)$/, "");
   const el = $("#search-results");
-  el.innerHTML = '<p class="empty">🔎 در حال جستجو...</p>';
+  el.innerHTML = '<p class="empty"><span class="spinner" style="display:inline-block"></span></p>';
   try {
     renderList(el, await call("search", { q }), { emptyText: "چیزی پیدا نشد 😕" });
   } catch (e) {
@@ -140,129 +194,28 @@ $$("#search-chips .chip").forEach((c) => (c.onclick = () => {
 }));
 
 /* ---------------- audio loading ---------------- */
-// Track audio comes from the bot in base64 parts; kept in memory for the session.
 const audioCache = new Map(); // id -> Promise<{ blob, url }>
 function loadAudio(t, onProgress) {
   if (!audioCache.has(t.id)) {
-    const p = (async () => {
-      const first = await call("audioChunk", { id: t.id, idx: 0 });
-      const parts = [b64ToBytes(first.data)];
-      onProgress?.(1, first.total);
-      for (let i = 1; i < first.total; i++) {
-        parts.push(b64ToBytes((await call("audioChunk", { id: t.id, idx: i })).data));
-        onProgress?.(i + 1, first.total);
-      }
-      const blob = new Blob(parts, { type: first.mime });
-      return { blob, url: URL.createObjectURL(blob) };
-    })();
+    const p = fetchParts("audioChunk", { id: t.id }, onProgress).then((blob) => ({ blob, url: URL.createObjectURL(blob) }));
     p.catch(() => audioCache.delete(t.id));
     audioCache.set(t.id, p);
   }
   return audioCache.get(t.id);
 }
 
-/* ---------------- sound engine: volume (to 150%), 3-band EQ, analyser for the visualizer ---------------- */
-const audio = $("#audio");
-const fx = { ctx: null, gain: null, low: null, mid: null, high: null, analyser: null, volume: +store.get("vol", 100) / 100, muted: false };
-function engine() {
-  if (fx.ctx) {
-    if (fx.ctx.state === "suspended") fx.ctx.resume();
-    return fx;
-  }
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const src = ctx.createMediaElementSource(audio);
-    const low = ctx.createBiquadFilter(), mid = ctx.createBiquadFilter(), high = ctx.createBiquadFilter();
-    low.type = "lowshelf"; low.frequency.value = 120;
-    mid.type = "peaking"; mid.frequency.value = 1400; mid.Q.value = 0.9;
-    high.type = "highshelf"; high.frequency.value = 6500;
-    const gain = ctx.createGain(), analyser = ctx.createAnalyser();
-    analyser.fftSize = 128;
-    src.connect(low); low.connect(mid); mid.connect(high); high.connect(gain); gain.connect(analyser); analyser.connect(ctx.destination);
-    Object.assign(fx, { ctx, gain, low, mid, high, analyser });
-    applyVolume();
-    applyEq();
-  } catch (e) {
-    console.warn("web audio unavailable", e);
-  }
-  return fx;
-}
-function applyVolume(rampSec = 0) {
-  const v = fx.muted ? 0 : fx.volume;
-  if (fx.gain) {
-    const t = fx.ctx.currentTime;
-    fx.gain.gain.cancelScheduledValues(t);
-    fx.gain.gain.setTargetAtTime(v, t, rampSec || 0.02);
-    audio.volume = 1;
-  } else audio.volume = Math.min(1, v);
-  $("#vol-mute").textContent = v === 0 ? "🔇" : v < 0.5 ? "🔈" : "🔊";
-  $("#vol-val").textContent = Math.round(fx.volume * 100);
-}
-const volEl = $("#vol");
-volEl.value = fx.volume * 100;
-paint(volEl);
-volEl.oninput = () => {
-  fx.volume = +volEl.value / 100;
-  fx.muted = false;
-  store.set("vol", volEl.value);
-  engine();
-  applyVolume();
-};
-$("#vol-mute").onclick = () => { fx.muted = !fx.muted; engine(); applyVolume(); };
-
-const EQ = { flat: [0, 0, 0], bass: [9, 0, -1], vocal: [-2, 5, 2], treble: [-1, 1, 8], party: [7, -2, 5] };
-function applyEq() {
-  if (!fx.low) return;
-  fx.low.gain.value = +$("#eq-low").value;
-  fx.mid.gain.value = +$("#eq-mid").value;
-  fx.high.gain.value = +$("#eq-high").value;
-}
-function setEq(name) {
-  const [l, m, h] = EQ[name] || EQ.flat;
-  $("#eq-low").value = l; $("#eq-mid").value = m; $("#eq-high").value = h;
-  $$("#eq-presets .chip").forEach((c) => c.classList.toggle("on", c.dataset.eq === name));
-  store.set("eq", name);
-  paintAll();
-  engine();
-  applyEq();
-}
-$$("#eq-presets .chip").forEach((c) => (c.onclick = () => setEq(c.dataset.eq)));
-["#eq-low", "#eq-mid", "#eq-high"].forEach((s) => ($(s).oninput = () => {
-  $$("#eq-presets .chip").forEach((c) => c.classList.remove("on"));
-  engine();
-  applyEq();
-}));
-setEq(store.get("eq", "flat"));
-
-// visualizer: gold bars under the cover
-(function viz() {
-  const cv = $("#viz"), g = cv.getContext("2d");
-  const data = new Uint8Array(64);
-  const draw = () => {
-    requestAnimationFrame(draw);
-    if ($("#player").hidden || !fx.analyser) return;
-    fx.analyser.getByteFrequencyData(data);
-    g.clearRect(0, 0, cv.width, cv.height);
-    const color = getComputedStyle(document.documentElement).getPropertyValue("--gold").trim() || "#ffc72c";
-    const n = 40, w = cv.width / n;
-    g.fillStyle = color;
-    g.shadowColor = color;
-    g.shadowBlur = 12;
-    for (let i = 0; i < n; i++) {
-      const v = audio.paused ? 0.04 : data[i + 2] / 255;
-      const h = Math.max(3, v * cv.height);
-      g.globalAlpha = 0.35 + v * 0.65;
-      g.fillRect(i * w + 2, cv.height - h, w - 4, h);
-    }
-  };
-  draw();
-})();
-
 /* ---------------- player ---------------- */
+const audio = $("#audio");
+// one button cycles: repeat all -> repeat one -> shuffle -> play in order
+const MODES = [
+  { id: "all", icon: "repeat", text: "🔁 تکرار همه" },
+  { id: "one", icon: "repeat-one", text: "🔂 تکرار همین آهنگ" },
+  { id: "shuffle", icon: "shuffle", text: "🔀 پخش تصادفی" },
+  { id: "off", icon: "order", text: "▶️ پخش به ترتیب" },
+];
 const player = {
   queue: [], idx: -1, cur: null,
-  repeat: store.get("repeat", "off"), // off | all | one
-  shuffle: store.get("shuffle", "0") === "1",
+  mode: store.get("mode", "all"),
   loadSeq: 0,
 
   playList(tracks, i) {
@@ -278,19 +231,20 @@ const player = {
     const seq = ++this.loadSeq;
     stopPreview();
     audio.pause();
+    audio.removeAttribute("src");
+    $("#t-dur").textContent = t.duration ? fmt(t.duration) : "0:00";
     this.render();
     setupCut();
     const loading = $("#p-loading");
     loading.hidden = false;
-    loading.textContent = "⏳";
+    $("#p-loading-text").textContent = "";
     try {
       const { url } = await loadAudio(t, (n, total) => {
-        if (seq === this.loadSeq) loading.textContent = `⏳ ${Math.round((n / total) * 100)}%`;
+        if (seq === this.loadSeq) $("#p-loading-text").textContent = `${Math.round((n / total) * 100)}%`;
       });
       if (seq !== this.loadSeq) return;
       audio.src = url;
-      audio.playbackRate = rate;
-      if (autoplay) play();
+      if (autoplay) audio.play().catch(() => {});
       call("played", { id: t.id }).catch(() => {});
       preloadNext();
     } catch (e) {
@@ -303,16 +257,18 @@ const player = {
     const t = this.cur;
     if (!t) return;
     $("#mini").hidden = false;
-    $("#mini-cover").src = $("#p-cover").src = t.thumb || PLACEHOLDER;
-    $("#mini-cover").onerror = $("#p-cover").onerror = (e) => (e.target.src = PLACEHOLDER);
+    for (const img of [$("#mini-cover"), $("#p-cover")]) {
+      img.onerror = () => (img.src = PLACEHOLDER);
+      img.src = t.thumb || PLACEHOLDER;
+    }
     $("#mini-title").textContent = $("#p-title").textContent = t.title;
     $("#mini-artist").textContent = $("#p-artist").textContent = t.artist || "";
-    $("#player-src").textContent = `${this.idx + 1} / ${this.queue.length} · ${SRC[t.source] || t.source || ""}`;
-    $("#p-like").textContent = t.liked ? "❤️" : "🤍";
-    $("#p-shuffle").classList.toggle("active", this.shuffle);
-    $("#p-repeat").classList.toggle("active", this.repeat !== "off");
-    $("#p-repeat").textContent = this.repeat === "one" ? "🔂" : "🔁";
-    $$(".item").forEach((el) => el.classList.remove("playing"));
+    $("#player-src").textContent = `${this.idx + 1} / ${this.queue.length}`;
+    setIcon($("#p-like i"), t.liked ? "heart-on" : "heart");
+    $("#p-like").classList.toggle("active", !!t.liked);
+    const m = MODES.find((x) => x.id === this.mode) || MODES[0];
+    setIcon($("#p-mode i"), m.icon);
+    $("#p-mode").classList.toggle("active", this.mode !== "off");
     if ("mediaSession" in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: t.title, artist: t.artist || "", artwork: t.thumb ? [{ src: t.thumb, sizes: "480x360" }] : [],
@@ -323,14 +279,14 @@ const player = {
   nextIndex(dir) {
     const n = this.queue.length;
     if (!n) return -1;
-    if (this.shuffle && n > 1) {
+    if (this.mode === "shuffle" && n > 1) {
       let j;
       do j = Math.floor(Math.random() * n); while (j === this.idx);
       return j;
     }
     const j = this.idx + dir;
-    if (j >= n) return this.repeat === "all" ? 0 : -1;
-    if (j < 0) return this.repeat === "all" ? n - 1 : 0;
+    if (j >= n) return this.mode === "off" ? -1 : 0;
+    if (j < 0) return this.mode === "off" ? 0 : n - 1;
     return j;
   },
   next(manual = true) {
@@ -344,76 +300,49 @@ const player = {
   },
   toggle() {
     if (!this.cur || !audio.src) return;
-    audio.paused ? play() : audio.pause();
+    audio.paused ? audio.play().catch(() => {}) : audio.pause();
   },
 };
 
-function play() {
-  engine();
-  if ($("#crossfade").checked && fx.gain) {
-    fx.gain.gain.setValueAtTime(0, fx.ctx.currentTime);
-    applyVolume(0.6);
-  }
-  audio.play().catch(() => {});
-}
-
 // fetch the next track in the background so skipping is instant
 function preloadNext() {
-  if (player.shuffle) return;
+  if (player.mode === "shuffle") return;
   const t = player.queue[player.idx + 1];
   if (t) loadAudio(t).catch(() => {});
 }
 
-let rate = 1;
-$$("#rate-chips .chip").forEach((c) => (c.onclick = () => {
-  rate = +c.dataset.rate;
-  audio.playbackRate = rate;
-  $$("#rate-chips .chip").forEach((x) => x.classList.toggle("on", x === c));
-}));
-
-// sleep timer
-let sleepTimer = null, sleepAtEnd = false;
-$$("#sleep-chips .chip").forEach((c) => (c.onclick = () => {
-  clearTimeout(sleepTimer);
-  sleepAtEnd = c.dataset.sleep === "end";
-  const min = +c.dataset.sleep || 0;
-  if (min) sleepTimer = setTimeout(() => { audio.pause(); toast("😴 تایمر خواب: پخش متوقف شد"); }, min * 60000);
-  $$("#sleep-chips .chip").forEach((x) => x.classList.toggle("on", x === c));
-  if (min || sleepAtEnd) toast(sleepAtEnd ? "😴 بعد از همین آهنگ متوقف میشه" : `😴 ${min} دقیقه دیگه متوقف میشه`);
-}));
-
-audio.addEventListener("play", () => ($("#p-play").textContent = $("#mini-play").textContent = "⏸"));
-audio.addEventListener("pause", () => ($("#p-play").textContent = $("#mini-play").textContent = "▶"));
+function setPlaying(on) {
+  for (const b of [$("#p-play i"), $("#mini-play i")]) setIcon(b, on ? "pause" : "play");
+  $("#eqbars").classList.toggle("on", on);
+}
+audio.addEventListener("play", () => setPlaying(true));
+audio.addEventListener("pause", () => setPlaying(false));
 audio.addEventListener("canplay", () => ($("#p-loading").hidden = true));
 audio.addEventListener("loadedmetadata", () => {
   $("#t-dur").textContent = fmt(audio.duration);
   setupCut();
 });
+audio.addEventListener("error", () => {
+  if (!audio.getAttribute("src")) return;
+  $("#p-loading").hidden = true;
+  toast("⚠️ این فایل پخش نشد؛ آهنگ بعدی...");
+  setTimeout(() => player.next(false), 1500);
+});
 audio.addEventListener("timeupdate", () => {
   const d = audio.duration || 0, c = audio.currentTime;
+  if (preview && c >= cut.b) audio.currentTime = cut.a; // looped preview of the cut
   if (!seeking) {
     $("#seek").value = d ? (c / d) * 1000 : 0;
     paint($("#seek"));
   }
   $("#t-cur").textContent = fmt(c);
   $("#mini-bar").style.width = d ? `${(c / d) * 100}%` : "0";
-  if (d && !preview) $("#cut-head").style.left = `${(c / d) * 100}%`;
-  // crossfade: fade out the last 3 s
-  if ($("#crossfade").checked && fx.gain && d && d - c < 3 && !fx.fading) {
-    fx.fading = true;
-    fx.gain.gain.setTargetAtTime(0, fx.ctx.currentTime, 0.8);
-  }
+  if (d) $("#cut-head").style.left = `${(c / d) * 100}%`;
 });
 audio.addEventListener("ended", () => {
-  fx.fading = false;
-  if (sleepAtEnd) {
-    sleepAtEnd = false;
-    $$("#sleep-chips .chip").forEach((x, i) => x.classList.toggle("on", i === 0));
-    return;
-  }
-  if (player.repeat === "one") {
+  if (player.mode === "one") {
     audio.currentTime = 0;
-    play();
+    audio.play().catch(() => {});
   } else player.next(false);
 });
 
@@ -438,18 +367,13 @@ $("#p-next").onclick = $("#mini-next").onclick = (e) => {
   player.next();
 };
 $("#p-prev").onclick = () => { haptic(); player.prev(); };
-$("#p-back10").onclick = () => (audio.currentTime = Math.max(0, audio.currentTime - 10));
-$("#p-fwd10").onclick = () => (audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 10));
-$("#p-shuffle").onclick = () => {
-  player.shuffle = !player.shuffle;
-  store.set("shuffle", player.shuffle ? "1" : "0");
-  toast(player.shuffle ? "🔀 پخش تصادفی روشن" : "پخش تصادفی خاموش");
-  player.render();
-};
-$("#p-repeat").onclick = () => {
-  player.repeat = { off: "all", all: "one", one: "off" }[player.repeat];
-  store.set("repeat", player.repeat);
-  toast({ off: "تکرار خاموش", all: "🔁 تکرار همه", one: "🔂 تکرار همین آهنگ" }[player.repeat]);
+$("#p-mode").onclick = () => {
+  const i = MODES.findIndex((x) => x.id === player.mode);
+  const m = MODES[(i + 1) % MODES.length];
+  player.mode = m.id;
+  store.set("mode", m.id);
+  toast(m.text, 1500);
+  haptic();
   player.render();
 };
 $("#p-like").onclick = async () => {
@@ -462,8 +386,21 @@ $("#p-like").onclick = async () => {
   player.render();
 };
 
+// volume
+const volEl = $("#vol");
+volEl.value = Math.max(5, +store.get("vol", 100));
+audio.volume = volEl.value / 100;
+volEl.oninput = () => {
+  audio.volume = volEl.value / 100;
+  store.set("vol", volEl.value);
+};
+$("#vol-btn").onclick = () => {
+  $("#vol-row").hidden = !$("#vol-row").hidden;
+  paint(volEl);
+};
+
 if ("mediaSession" in navigator) {
-  navigator.mediaSession.setActionHandler("play", () => play());
+  navigator.mediaSession.setActionHandler("play", () => audio.play());
   navigator.mediaSession.setActionHandler("pause", () => audio.pause());
   navigator.mediaSession.setActionHandler("nexttrack", () => player.next());
   navigator.mediaSession.setActionHandler("previoustrack", () => player.prev());
@@ -525,17 +462,19 @@ function renderQueue() {
 }
 
 /* send to chat */
-["128", "192", "320"].forEach((q) => $("#send-audio").insertAdjacentHTML("beforeend", `<button class="pill" data-send="audio:${q}">${q} kbps</button>`));
-["360", "480", "720", "1080"].forEach((q) => $("#send-video").insertAdjacentHTML("beforeend", `<button class="pill" data-send="video:${q}">${q}p</button>`));
+$("#send-audio").innerHTML = ["128", "192", "320"].map((q) => `<button class="pill" data-send="audio:${q}">${icon("music")} ${q}k</button>`).join("")
+  + `<button class="pill" data-send="voice:">${icon("mic")} ویس</button>`;
+$("#send-video").innerHTML = ["360", "720", "1080"].map((q) => `<button class="pill" data-send="video:${q}">🎬 ${q}p</button>`).join("");
+$$("#panel-send svg").forEach((s) => s.setAttribute("width", "16"));
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-send]");
   if (!b || !player.cur) return;
   const [kind, quality] = b.dataset.send.split(":");
   b.disabled = true;
-  toast("⏳ دارم آماده می‌کنم؛ تو چت ربات می‌فرستم...", 4000);
+  toast("⏳ دارم می‌فرستم تو چت...", 4000);
   try {
     await call("sendTrack", { id: player.cur.id, kind, quality });
-    toast("✅ تو چت ربات فرستادم");
+    toast("✅ تو چت فرستادم");
     haptic("medium");
   } catch (err) {
     toast("⚠️ " + err.message, 5000);
@@ -558,6 +497,7 @@ $("#p-add").onclick = async () => {
       await call("playlist", { op: "create", name, trackId: t.id });
     } else await call("playlist", { op: "add", id: Number(id), trackId: t.id });
     toast("✅ اضافه شد");
+    haptic("medium");
   };
   const buttons = lib.playlists.slice(0, 2).map((p) => ({ id: String(p.id), type: "default", text: p.name.slice(0, 30) }));
   buttons.push({ id: "new", type: "default", text: "➕ پلی‌لیست جدید" });
@@ -569,34 +509,32 @@ $("#p-add").onclick = async () => {
   const pick = prompt(`شماره پلی‌لیست، یا اسم یه پلی‌لیست جدید:\n${names}`);
   if (!pick) return;
   const p = lib.playlists[+pick - 1];
-  if (p) await add(String(p.id)).catch((e) => toast(e.message));
-  else {
-    await call("playlist", { op: "create", name: pick, trackId: t.id }).catch((e) => toast(e.message));
-    toast("✅ پلی‌لیست ساخته شد");
-  }
+  await (p ? add(String(p.id)) : call("playlist", { op: "create", name: pick, trackId: t.id }).then(() => toast("✅ پلی‌لیست ساخته شد"))).catch((e) => toast(e.message));
 };
 
 $("#p-remix").onclick = async () => {
   const t = player.cur;
   if (!t) return;
-  toast("🔁 دنبال ریمیکس‌ها...");
+  toast("⏳ دنبال ریمیکس‌ها...");
   const list = await call("remixes", { id: t.id }).catch((e) => (toast(e.message), null));
-  if (!list?.length) return toast("ریمیکسی پیدا نشد");
+  if (!list) return;
+  if (!list.length) return toast("ریمیکسی پیدا نشد");
   closePlayer();
   showView("v-search");
   $("#q").value = `${t.artist || ""} ${t.title} remix`.trim();
   renderList($("#search-results"), list);
 };
 
-/* ---------------- editor: cut, ringtone, effects (Web Audio, in the browser) ---------------- */
-const cut = { a: 0, b: 30, fx: "", track: null };
+/* ---------------- cutter ---------------- */
+const cut = { a: 0, b: 30, track: null };
 const trackDur = () => audio.duration || player.cur?.duration || 0;
+let preview = false;
 
 function setupCut() {
   const d = trackDur();
   if (!d) return;
   ["#cut-a", "#cut-b"].forEach((s) => ($(s).max = d.toFixed(1)));
-  // (re)start from the 30 s around the chorus for a new track, or once the real length is known
+  // a new track starts with the 30 s around the chorus; redo once the real length is known
   if (cut.track !== player.cur?.id || cut.b > d + 0.5) {
     cut.track = player.cur?.id;
     cut.a = Math.max(0, d * 0.4 - 15);
@@ -618,156 +556,46 @@ function drawCut() {
   $("#cut-sel").style.left = `${(cut.a / d) * 100}%`;
   $("#cut-sel").style.width = `${((cut.b - cut.a) / d) * 100}%`;
 }
-const restartPreview = () => preview && startPreview();
+const jumpPreview = () => preview && (audio.currentTime = cut.a);
 $("#cut-a").oninput = () => { cut.a = +$("#cut-a").value; drawCut(); };
 $("#cut-b").oninput = () => { cut.b = +$("#cut-b").value; drawCut(); };
-$("#cut-a").onchange = $("#cut-b").onchange = restartPreview;
+$("#cut-a").onchange = jumpPreview;
 $$("[data-nudge]").forEach((b) => (b.onclick = () => {
   const [k, v] = b.dataset.nudge.split(":");
   cut[k] += +v;
   drawCut();
-  restartPreview();
+  jumpPreview();
 }));
 $$("[data-mark]").forEach((b) => (b.onclick = () => {
   cut[b.dataset.mark] = audio.currentTime;
   drawCut();
-  restartPreview();
 }));
-$("#cut-whole").onclick = () => { cut.a = 0; cut.b = trackDur(); drawCut(); restartPreview(); };
-function ringtoneRange() {
-  const d = trackDur();
-  cut.a = Math.max(0, d * 0.4 - 15);
-  cut.b = Math.min(d, cut.a + 30);
-  $("#cut-fade").checked = true;
-  drawCut();
-}
 $("#cut-bar").onclick = (e) => {
   const r = e.currentTarget.getBoundingClientRect();
   const t = ((e.clientX - r.left) / r.width) * trackDur();
   if (Math.abs(t - cut.a) < Math.abs(t - cut.b)) cut.a = t; else cut.b = t;
   drawCut();
-  restartPreview();
+  jumpPreview();
 };
-function setEditMode(mode) {
-  $$("#edit-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
-  $("#fx-chips").hidden = mode !== "fx";
-  if (mode === "ringtone") ringtoneRange();
-  restartPreview();
-}
-$$("#edit-mode button").forEach((b) => (b.onclick = () => setEditMode(b.dataset.mode)));
-$$("#fx-chips .chip").forEach((c) => (c.onclick = () => {
-  cut.fx = c.dataset.fx;
-  $$("#fx-chips .chip").forEach((x) => x.classList.toggle("on", x === c));
-  restartPreview();
-}));
 
-const RATE = { slow: 0.85, fast: 1.2 };
-let decoded = { id: null, buffer: null };
-async function getBuffer() {
-  const t = player.cur;
-  if (decoded.id === t.id) return decoded.buffer;
-  $("#edit-status").textContent = "⏳ آماده‌سازی صدا...";
-  const { blob } = await loadAudio(t);
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
-  ctx.close();
-  decoded = { id: t.id, buffer };
-  $("#edit-status").textContent = "";
-  return buffer;
-}
-
-function impulse(ctx, seconds = 2.5) {
-  const len = Math.floor(ctx.sampleRate * seconds);
-  const buf = ctx.createBuffer(2, len, ctx.sampleRate);
-  for (let ch = 0; ch < 2; ch++) {
-    const d = buf.getChannelData(ch);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 3;
-  }
-  return buf;
-}
-
-/** The effect chain between a source and ctx.destination; the same graph plays live and renders offline. */
-function buildGraph(ctx, buffer, { a, b, fx, fade }) {
-  const rate = RATE[fx] || 1;
-  const outDur = (b - a) / rate;
-  const src = ctx.createBufferSource();
-  src.buffer = buffer;
-  src.playbackRate.value = rate;
-  let node = src;
-  const link = (n) => (node.connect(n), (node = n));
-
-  if (fx === "karaoke" && buffer.numberOfChannels > 1) {
-    // left minus right removes what is mixed in the centre: usually the vocals
-    const split = ctx.createChannelSplitter(2), merge = ctx.createChannelMerger(2);
-    const l = ctx.createGain(), r = ctx.createGain();
-    r.gain.value = -1;
-    node.connect(split);
-    split.connect(l, 0);
-    split.connect(r, 1);
-    for (const g of [l, r]) { g.connect(merge, 0, 0); g.connect(merge, 0, 1); }
-    node = merge;
-  }
-  if (fx === "bass") {
-    const f = ctx.createBiquadFilter();
-    f.type = "lowshelf"; f.frequency.value = 110; f.gain.value = 12;
-    link(f);
-    link(ctx.createDynamicsCompressor());
-  }
-  if (fx === "loud") {
-    const g = ctx.createGain();
-    g.gain.value = 1.8;
-    link(g);
-    link(ctx.createDynamicsCompressor());
-  }
-  if (fx === "8d") {
-    const p = ctx.createStereoPanner();
-    const steps = Math.max(2, Math.ceil(outDur * 20));
-    const curve = new Float32Array(steps);
-    for (let i = 0; i < steps; i++) curve[i] = 0.9 * Math.sin((2 * Math.PI * 0.09 * i) / 20);
-    p.pan.setValueCurveAtTime(curve, ctx.currentTime, outDur);
-    link(p);
-  }
-  const out = ctx.createGain();
-  if (fade) {
-    const f = Math.min(2, outDur / 4), t0 = ctx.currentTime;
-    out.gain.setValueAtTime(0, t0);
-    out.gain.linearRampToValueAtTime(1, t0 + f);
-    out.gain.setValueAtTime(1, t0 + outDur - f);
-    out.gain.linearRampToValueAtTime(0, t0 + outDur);
-  }
-  if (fx === "slow") {
-    const wet = ctx.createGain(), conv = ctx.createConvolver();
-    wet.gain.value = 0.35;
-    conv.buffer = impulse(ctx);
-    node.connect(conv);
-    conv.connect(wet);
-    wet.connect(out);
-  }
-  node.connect(out);
-  out.connect(ctx.destination);
-  src.start(ctx.currentTime, a, b - a);
-  return { src, outDur };
-}
-
-let preview = null; // { ctx, src }
+// preview = the player itself looping the selection
 function stopPreview() {
   if (!preview) return;
-  try { preview.src.stop(); } catch {}
-  preview.ctx.close();
-  preview = null;
-  $("#cut-preview").textContent = "▶ گوش دادن";
+  preview = false;
+  $("#cut-preview").innerHTML = `${icon("play")} گوش دادن`;
 }
-async function startPreview() {
-  const buffer = await getBuffer();
-  if (preview) { try { preview.src.stop(); } catch {} preview.ctx.close(); }
-  audio.pause();
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const { src } = buildGraph(ctx, buffer, { a: cut.a, b: cut.b, fx: cut.fx, fade: $("#cut-fade").checked });
-  preview = { ctx, src };
-  src.onended = () => preview?.src === src && startPreview(); // loop the selection
-  $("#cut-preview").textContent = "⏹ توقف";
-}
-$("#cut-preview").onclick = () => (preview ? stopPreview() : startPreview().catch((e) => toast("⚠️ " + e.message)));
+$("#cut-preview").onclick = () => {
+  if (!audio.src) return;
+  if (preview) {
+    stopPreview();
+    audio.pause();
+    return;
+  }
+  preview = true;
+  audio.currentTime = cut.a;
+  audio.play().catch(() => {});
+  $("#cut-preview").innerHTML = `${icon("pause")} توقف`;
+};
 
 function encodeMp3(buffer, kbps = 192) {
   const ch = Math.min(2, buffer.numberOfChannels);
@@ -789,44 +617,50 @@ function encodeMp3(buffer, kbps = 192) {
   return new Blob(chunks, { type: "audio/mpeg" });
 }
 
-async function renderEdit() {
-  const buffer = await getBuffer();
-  const rate = RATE[cut.fx] || 1;
-  const sr = buffer.sampleRate;
-  const len = Math.ceil(((cut.b - cut.a) / rate) * sr);
-  const off = new OfflineAudioContext(Math.min(2, buffer.numberOfChannels), len, sr);
-  buildGraph(off, buffer, { a: cut.a, b: cut.b, fx: cut.fx, fade: $("#cut-fade").checked });
-  $("#edit-status").textContent = "🎛 در حال پردازش...";
-  const rendered = await off.startRendering();
-  $("#edit-status").textContent = "💾 ساخت mp3...";
-  await new Promise((r) => setTimeout(r, 30));
-  return encodeMp3(rendered);
+/** The selection with a short fade in/out, as mp3. */
+async function renderCut() {
+  const { blob } = await loadAudio(player.cur);
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+  ctx.close();
+  const sr = buf.sampleRate, dur = cut.b - cut.a;
+  const off = new OfflineAudioContext(Math.min(2, buf.numberOfChannels), Math.ceil(dur * sr), sr);
+  const src = off.createBufferSource();
+  src.buffer = buf;
+  const g = off.createGain();
+  const f = Math.min(1.5, dur / 4);
+  g.gain.setValueAtTime(0, 0);
+  g.gain.linearRampToValueAtTime(1, f);
+  g.gain.setValueAtTime(1, dur - f);
+  g.gain.linearRampToValueAtTime(0, dur);
+  src.connect(g);
+  g.connect(off.destination);
+  src.start(0, cut.a, dur);
+  return encodeMp3(await off.startRendering());
 }
 
 $("#cut-send").onclick = async () => {
   const t = player.cur;
   if (!t) return;
-  if (!window.lamejs) return toast("⚠️ کتابخانه mp3 لود نشد؛ اینترنت رو چک کن");
+  if (!window.lamejs) return toast("⚠️ اینترنت رو چک کن و دوباره امتحان کن");
   const btn = $("#cut-send");
   btn.disabled = true;
   stopPreview();
   try {
-    const blob = await renderEdit();
-    const bytes = new Uint8Array(await blob.arrayBuffer());
+    $("#edit-status").textContent = "⏳ دارم می‌برم...";
+    const bytes = new Uint8Array(await (await renderCut()).arrayBuffer());
     const PART = 700 * 1024;
     const total = Math.ceil(bytes.length / PART);
     const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    const fxLabel = $(`#fx-chips [data-fx="${cut.fx}"]`)?.textContent.replace(/^\S+\s/, "") || "";
-    const label = [`${fmt(cut.a)}-${fmt(cut.b)}`, cut.fx && fxLabel].filter(Boolean).join(" ");
     for (let i = 0; i < total; i++) {
-      $("#edit-status").textContent = `📤 ارسال ${i + 1} از ${total}...`;
+      $("#edit-status").textContent = `⏳ ارسال ${Math.round(((i + 1) / total) * 100)}%`;
       const last = i === total - 1;
       await call("uploadEdit", {
         token, idx: i, data: bytesToB64(bytes.subarray(i * PART, (i + 1) * PART)), last,
-        ...(last ? { meta: { id: t.id, label, voice: $("#cut-fmt").value === "voice" } } : {}),
+        ...(last ? { meta: { id: t.id, label: `${fmt(cut.a)}-${fmt(cut.b)}` } } : {}),
       });
     }
-    $("#edit-status").textContent = "✅ تو چت ربات فرستادم";
+    $("#edit-status").textContent = "✅ تو چت فرستادم";
     haptic("heavy");
   } catch (e) {
     $("#edit-status").textContent = "⚠️ " + e.message;
@@ -835,10 +669,10 @@ $("#cut-send").onclick = async () => {
   }
 };
 
-/* ---------------- listen (recognition) ----------------
+/* ---------------- recognition ----------------
    1. Shazam: fingerprint made here in the browser (shazamio-core), looked up by the "shazam" endpoint
    2. the bot's paid engines if the admin set them (AudD, ACRCloud, humming, Whisper)
-   3. "I'll sing" mode: the phone's own speech recognition turns the sung words into text -> search */
+   3. "I sing" mode: the phone's own speech recognition turns the sung words into text -> search */
 const SHAZAMIO = "https://cdn.jsdelivr.net/npm/shazamio-core@1.3.1/web/";
 let shazamLib = null;
 function shazamCore() {
@@ -870,14 +704,14 @@ async function decodeBlob(blob) {
   }
 }
 
-/** Shazam on a recording / file: a few 12 s windows until one matches. -> endpoint result or null */
-async function shazamBlob(blob) {
+/** Shazam on a recording / file: a few 12 s windows until one matches. */
+async function shazamBlob(blob, deliver = false) {
   const [m, buf] = await Promise.all([shazamCore(), decodeBlob(blob)]);
   const d = buf.duration;
-  const starts = d <= 16 ? [0] : [0.2, 0.45, 0.7].map((f) => Math.max(0, d * f - 6));
+  const starts = d <= 16 ? [0] : [0.15, 0.4, 0.65, 0.85].map((f) => Math.max(0, d * f - 6));
   for (const st of starts) {
     const sig = m.DecodedSignature.new(monoSlice(buf, st, 12), buf.sampleRate, 1);
-    const input = { uri: sig.uri, samplems: sig.samplems };
+    const input = { uri: sig.uri, samplems: sig.samplems, deliver };
     sig.free();
     const r = await call("shazam", input);
     if (r.match) return r;
@@ -888,19 +722,24 @@ async function shazamBlob(blob) {
 let engines = null;
 const getEngines = () => (engines ??= call("engines").catch(() => ({ fingerprint: false, humming: false })));
 
-function showRecognition(r, el, note = "") {
+function showMatch(r, el, note = "") {
   if (r.match) {
     const m = r.match;
-    el.innerHTML = `<div class="match glass"><img src="${esc(m.cover || r.tracks[0]?.thumb || PLACEHOLDER)}"><div>
-      <h3>${esc(m.title)}</h3><p class="muted">${esc(m.artist || "")}${m.album ? " · " + esc(m.album) : ""}</p><small>با ${esc(m.engine)}</small></div></div>`;
+    el.innerHTML = `<div class="match glass"><img src="${esc(m.cover || r.tracks?.[0]?.thumb || PLACEHOLDER)}" onerror="this.src='${PLACEHOLDER}'"><div>
+      <h3>${esc(m.title)}</h3><p class="muted">${esc(m.artist || "")}</p>
+      ${r.tracks?.[0] ? `<button class="gold-btn send-btn" id="match-send">${icon("send")} بفرست تو چت</button>` : ""}</div></div>`;
+    $("#match-send") && ($("#match-send").onclick = async (e) => {
+      e.target.disabled = true;
+      await call("sendTrack", { id: r.tracks[0].id, kind: "audio" }).then(() => toast("✅ تو چت فرستادم")).catch((x) => toast("⚠️ " + x.message));
+      e.target.disabled = false;
+    });
     haptic("heavy");
     $("#listen-status").textContent = "✅ پیدا شد!";
   } else if (r.transcript) {
-    el.innerHTML = `<div class="match glass"><div><b>📝 چیزی که شنیدم:</b><p>«${esc(r.transcript)}»</p>
-      ${r.lyricHits?.length ? "<small>آهنگ‌هایی با این متن: " + r.lyricHits.map(esc).join("، ") + "</small>" : ""}</div></div>`;
+    el.innerHTML = `<div class="match glass"><div><b>📝 «${esc(r.transcript)}»</b></div></div>`;
     $("#listen-status").textContent = "با کلمه‌هایی که خوندی گشتم 👇";
   } else {
-    $("#listen-status").textContent = note || "😕 پیدا نشد؛ صدای واضح‌تر و نزدیک‌تر امتحان کن، یا یه تیکه از متن آهنگ رو جستجو کن";
+    $("#listen-status").textContent = note || "😕 پیدا نشد؛ صدای واضح‌تر و نزدیک‌تر امتحان کن";
   }
   const list = document.createElement("div");
   list.className = "list";
@@ -913,11 +752,9 @@ $$("#listen-mode button").forEach((b) => (b.onclick = () => {
   listenMode = b.dataset.mode;
   $$("#listen-mode button").forEach((x) => x.classList.toggle("on", x === b));
   $("#sing-lang").hidden = listenMode !== "sing";
-  $("#listen-status").textContent = listenMode === "sing"
-    ? "بزن و چند خط از آهنگ رو بخون (کلمه‌ها مهمن)"
-    : "بزن و گوشی رو نزدیک صدای آهنگ بگیر";
+  $("#listen-status").textContent = listenMode === "sing" ? "بزن و چند خط از آهنگ رو بخون" : "بزن و گوشی رو نزدیک صدای آهنگ بگیر";
 }));
-$("#sing-lang").value = store.get("singLang", navigator.language?.startsWith("tr") ? "tr-TR" : "fa-IR");
+$("#sing-lang").value = store.get("singLang", "fa-IR");
 $("#sing-lang").onchange = () => store.set("singLang", $("#sing-lang").value);
 
 async function recognizeBlob(blob, spoken = "") {
@@ -925,24 +762,16 @@ async function recognizeBlob(blob, spoken = "") {
   el.innerHTML = "";
   const sing = listenMode === "sing";
   try {
-    $("#listen-status").textContent = "🔍 دارم با Shazam پیدا می‌کنم...";
+    $("#listen-status").textContent = "🔍 دارم پیدا می‌کنم...";
     const r = await shazamBlob(blob).catch((e) => (console.warn("shazam", e), null));
-    if (r) return showRecognition(r, el);
-
+    if (r) return showMatch(r, el);
     const eng = await getEngines();
-    if ((sing ? eng.humming : eng.fingerprint) && blob.size < 6 * 1024 * 1024) {
-      $("#listen-status").textContent = "🔍 دارم بیشتر می‌گردم...";
+    if ((sing ? eng.humming : eng.fingerprint) && blob.size < 1024 * 1024) {
       const r2 = await call("recognize", { data: bytesToB64(new Uint8Array(await blob.arrayBuffer())), mime: blob.type || "audio/webm", hum: sing });
-      if (r2.match || r2.transcript) return showRecognition(r2, el);
+      if (r2.match || r2.transcript) return showMatch(r2, el);
     }
-    if (spoken) {
-      $("#listen-status").textContent = "🔍 دارم با کلمه‌هایی که خوندی می‌گردم...";
-      const tracks = await call("search", { q: spoken });
-      return showRecognition({ transcript: spoken, tracks }, el);
-    }
-    showRecognition({}, el, sing
-      ? "😕 پیدا نشد. کلمه‌های آهنگ رو واضح‌تر بخون، یا متنش رو تو جستجو بنویس"
-      : "😕 پیدا نشد؛ صدای واضح‌تر و نزدیک‌تر (۱۰ تا ۱۵ ثانیه) امتحان کن");
+    if (spoken) return showMatch({ transcript: spoken, tracks: await call("search", { q: spoken }) }, el);
+    showMatch({}, el, sing ? "😕 پیدا نشد؛ کلمه‌ها رو واضح‌تر بخون یا متن آهنگ رو تو جستجو بنویس" : "");
   } catch (e) {
     $("#listen-status").textContent = "⚠️ " + e.message;
   }
@@ -956,14 +785,12 @@ $("#listen-btn").onclick = async () => {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   } catch {
-    $("#listen-status").textContent = "⚠️ اجازه میکروفون داده نشد. می‌تونی تو چت ربات ویس بفرستی.";
+    $("#listen-status").textContent = "⚠️ اجازه میکروفون داده نشد؛ می‌تونی تو چت ویس بفرستی.";
     return;
   }
   const wasPlaying = !audio.paused;
   audio.pause();
-  stopPreview();
   const sing = listenMode === "sing";
-  // words of the song, from the phone's own speech recognition (free; Chrome/Android)
   let spoken = "";
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   let sr = null;
@@ -972,7 +799,6 @@ $("#listen-btn").onclick = async () => {
       sr = new SR();
       sr.lang = $("#sing-lang").value;
       sr.continuous = true;
-      sr.interimResults = false;
       sr.onresult = (e) => { spoken = [...e.results].map((x) => x[0].transcript).join(" ").trim(); };
       sr.onerror = () => {};
       sr.start();
@@ -984,7 +810,7 @@ $("#listen-btn").onclick = async () => {
   let left = sing ? 15 : 12;
   const timer = setInterval(() => {
     left -= 1;
-    $("#listen-label").innerHTML = `${left}<br>ثانیه`;
+    $("#listen-label").textContent = `${left}`;
     if (left <= 0 && recorder.state === "recording") recorder.stop();
   }, 1000);
   recorder.onstop = () => {
@@ -992,16 +818,15 @@ $("#listen-btn").onclick = async () => {
     clearInterval(timer);
     try { sr?.stop(); } catch {}
     $("#listen-btn").classList.remove("rec");
-    $("#listen-label").innerHTML = "🎧<br>گوش بده";
-    // speech results arrive a moment after stop
+    $("#listen-label").textContent = "گوش بده";
     setTimeout(() => recognizeBlob(new Blob(chunks, { type: recorder.mimeType }), spoken), sr ? 700 : 0);
-    if (wasPlaying) play();
+    if (wasPlaying) audio.play().catch(() => {});
   };
   recorder.start();
   haptic("medium");
   $("#listen-btn").classList.add("rec");
   $("#listen-status").textContent = sing ? "🎤 بخون..." : "👂 دارم گوش می‌دم...";
-  $("#listen-label").innerHTML = `${left}<br>ثانیه`;
+  $("#listen-label").textContent = `${left}`;
 };
 $("#listen-file").onchange = (e) => {
   const f = e.target.files[0];
@@ -1010,22 +835,32 @@ $("#listen-file").onchange = (e) => {
 };
 
 /* ---------------- library ---------------- */
+function mosaic(covers, big = false) {
+  const c = (covers || []).filter(Boolean);
+  if (!c.length) return `<div class="mosaic${big ? " big" : ""}"><div class="ph">${icon("music")}</div></div>`;
+  const imgs = c.length < 4 ? [c[0]] : c.slice(0, 4);
+  return `<div class="mosaic${big ? " big" : ""}${imgs.length === 1 ? " one" : ""}">${imgs.map((u) => `<img src="${esc(u)}" loading="lazy" onerror="this.src='${PLACEHOLDER}'">`).join("")}</div>`;
+}
+
 let libCache = null;
 async function loadLibrary() {
-  $("#lib-cards").innerHTML = '<p class="empty">...</p>';
+  $("#lib-cards").innerHTML = '<p class="empty"><span class="spinner" style="display:inline-block"></span></p>';
   try {
     libCache = await call("library");
   } catch (e) {
     $("#lib-cards").innerHTML = `<p class="empty">${esc(e.message)}</p>`;
     return;
   }
-  const cards = [
-    `<div class="card glass smart" data-open="smart"><span class="ico">🌟</span><div><b>منتخب تو</b><br><small>${libCache.smart.length} آهنگ · خودکار از چیزایی که بیشتر گوش دادی، دانلود و لایک کردی</small></div></div>`,
-    `<div class="card glass" data-open="liked"><span class="ico">❤️</span><div><b>لایک‌ها</b><br><small>${libCache.liked.length} آهنگ</small></div></div>`,
-    ...libCache.playlists.map((p) => `<div class="card glass" data-open="${p.id}"><span class="ico">📁</span><div><b>${esc(p.name)}</b><br><small>${p.count} آهنگ</small></div></div>`),
-  ];
-  $("#lib-cards").innerHTML = cards.join("");
+  const card = (key, covers, title, sub, cls = "") =>
+    `<div class="card glass ${cls}" data-open="${key}">${mosaic(covers)}<div><b>${esc(title)}</b><small>${esc(sub)}</small></div></div>`;
+  $("#lib-cards").innerHTML = [
+    card("smart", libCache.smartCovers, "🌟 منتخب تو", `${libCache.smart.length} آهنگ · بر اساس سلیقه‌ات`, "smart"),
+    card("liked", libCache.likedCovers, "❤️ لایک‌ها", `${libCache.liked.length} آهنگ`),
+    ...libCache.playlists.map((p) => card(p.id, p.covers, p.name, `${p.count} آهنگ`)),
+    `<div class="card glass new" id="card-new">${icon("plus").replace("<svg", '<svg width="34" height="34"')}<small>پلی‌لیست جدید</small></div>`,
+  ].join("");
   $$("#lib-cards [data-open]").forEach((c) => (c.onclick = () => openCollection(c.dataset.open)));
+  $("#card-new").onclick = () => $("#new-pl").click();
 }
 
 let libTracks = [];
@@ -1034,24 +869,30 @@ async function openCollection(key) {
   $("#lib-detail").hidden = false;
   tg?.BackButton?.show();
   const list = $("#lib-list");
-  list.innerHTML = '<p class="empty">...</p>';
+  list.innerHTML = '<p class="empty"><span class="spinner" style="display:inline-block"></span></p>';
   $("#lib-actions").innerHTML = "";
+  const showHead = (title, covers, n) => {
+    $("#lib-title").textContent = title;
+    $("#lib-mosaic").outerHTML = mosaic(covers, true).replace('class="mosaic', 'id="lib-mosaic" class="mosaic');
+    $("#lib-count").textContent = `${n} آهنگ`;
+  };
   if (key === "smart" || key === "liked") {
-    $("#lib-title").textContent = key === "smart" ? "🌟 منتخب تو" : "❤️ لایک‌ها";
     libTracks = libCache[key];
-    renderList(list, libTracks, { emptyText: key === "smart" ? "هنوز چیزی گوش ندادی؛ چندتا آهنگ پخش یا دانلود کن تا لیستت ساخته بشه" : "هنوز چیزی لایک نکردی" });
+    showHead(key === "smart" ? "🌟 منتخب تو" : "❤️ لایک‌ها", libCache[`${key}Covers`], libTracks.length);
+    renderList(list, libTracks, { emptyText: key === "smart" ? "چندتا آهنگ گوش بده تا این لیست خودکار ساخته بشه" : "هنوز چیزی لایک نکردی" });
     return;
   }
   const p = libCache.playlists.find((x) => String(x.id) === key);
   const id = Number(key);
-  $("#lib-title").textContent = "📁 " + (p?.name || "");
-  $("#lib-actions").innerHTML = '<button class="icon" id="pl-rename">✏️</button><button class="icon" id="pl-del">🗑</button>';
+  showHead(p?.name || "", p?.covers, p?.count || 0);
+  $("#lib-actions").innerHTML = `<button class="pill" id="pl-rename">${icon("pencil")}</button><button class="pill" id="pl-del">${icon("trash")}</button>`;
+  $$("#lib-actions svg").forEach((s) => s.setAttribute("width", "16"));
   $("#pl-rename").onclick = async () => {
     const name = prompt("اسم جدید:", p.name);
     if (!name) return;
     await call("playlist", { op: "rename", id, name });
     p.name = name;
-    $("#lib-title").textContent = "📁 " + name;
+    $("#lib-title").textContent = name;
   };
   $("#pl-del").onclick = async () => {
     if (!confirm("این پلی‌لیست حذف بشه؟")) return;
@@ -1059,8 +900,9 @@ async function openCollection(key) {
     $("#lib-back").click();
   };
   libTracks = await call("playlist", { op: "get", id });
+  $("#lib-count").textContent = `${libTracks.length} آهنگ`;
   renderList(list, libTracks, {
-    emptyText: "خالیه؛ از دکمه ➕ تو پلیر آهنگ اضافه کن",
+    emptyText: "خالیه؛ از دکمه‌ی پلی‌لیست تو پلیر آهنگ اضافه کن",
     onRemove: async (t, row) => {
       await call("playlist", { op: "remove", id, trackId: t.id });
       libTracks = libTracks.filter((x) => x.id !== t.id);
@@ -1077,7 +919,7 @@ $("#lib-back").onclick = () => {
 $("#lib-play").onclick = () => libTracks.length && player.playList(libTracks, 0);
 $("#lib-shuffle").onclick = () => {
   if (!libTracks.length) return;
-  player.shuffle = true;
+  player.mode = "shuffle";
   player.playList(libTracks, Math.floor(Math.random() * libTracks.length));
 };
 $("#new-pl").onclick = async () => {
@@ -1088,11 +930,11 @@ $("#new-pl").onclick = async () => {
 };
 
 /* ---------------- history ---------------- */
-const KIND = { search: "🔎", recognize: "🎙", play: "▶️", download: "⬇️", edit: "✂️", open: "👁" };
+const KIND = { search: "🔎", recognize: "🎧", play: "▶️", download: "⬇️", edit: "✂️", open: "🔗" };
 let histKind = "";
 async function loadHistory() {
   const el = $("#hist-list");
-  el.innerHTML = '<p class="empty">...</p>';
+  el.innerHTML = '<p class="empty"><span class="spinner" style="display:inline-block"></span></p>';
   let rows;
   try {
     rows = await call("history", histKind ? { kind: histKind } : {});
@@ -1100,6 +942,7 @@ async function loadHistory() {
     el.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
     return;
   }
+  rows = rows.filter((r) => r.track_id || (r.query && r.query !== "-"));
   if (!rows.length) {
     el.innerHTML = '<p class="empty">تاریخچه خالیه</p>';
     return;
@@ -1117,7 +960,7 @@ async function loadHistory() {
     if (r.track_id) {
       row.className = "item";
       row.innerHTML = `<img loading="lazy" src="${esc(r.thumb || PLACEHOLDER)}" onerror="this.src='${PLACEHOLDER}'">
-        <div class="meta"><b>${KIND[r.kind] || ""} ${esc(r.title)}</b><small>${esc(r.artist || "")} ${r.query ? "· " + esc(r.query) : ""}</small></div>`;
+        <div class="meta"><b>${esc(r.title)}</b><small>${KIND[r.kind] || ""} ${esc(r.artist || "")}</small></div>`;
       row.onclick = () => player.playList(tracks, tracks.findIndex((t) => t.id === r.track_id));
     } else {
       row.className = "qline";
@@ -1142,43 +985,47 @@ $("#hist-clear").onclick = async () => {
   loadHistory();
 };
 
-/* ---------------- deep links from the chat ----------------
-   ?rec=1                         recognize the voice/video just sent in the chat
-   ?t=ID&shazam=1                 recognize the song of a track/link
-   ?t=ID&edit=1 (or cut|ringtone|slow|fast|bass|8d|karaoke|loud) [&a=&b=]   open the editor */
+/* ---------------- opened from the chat ----------------
+   ?rec=1              find the song of the voice / video / link just sent; the bot sends it to the chat
+   ?t=ID [&edit=1 [&a=&b=]]   play a track (and open the cutter) */
+async function runChatRecognition() {
+  $("#rec-screen").hidden = false;
+  $("#rec-actions").hidden = true;
+  $("#rec-title").textContent = "دارم پیدا می‌کنم…";
+  $("#rec-sub").textContent = "";
+  try {
+    shazamCore().catch(() => {});
+    const blob = await fetchParts("pendingSample", {}, (n, total) => total > 1 && ($("#rec-sub").textContent = `${Math.round((n / total) * 100)}%`));
+    $("#rec-sub").textContent = "";
+    const r = await shazamBlob(blob, true);
+    if (r?.match) {
+      haptic("heavy");
+      $("#rec-title").textContent = `✅ ${r.match.title}`;
+      $("#rec-sub").textContent = `${r.match.artist || ""} — تو چت برات فرستادم`;
+      setTimeout(() => tg?.close?.(), 1800);
+      return;
+    }
+    $("#rec-title").textContent = "😕 پیدا نشد";
+    $("#rec-sub").textContent = "صدای آهنگ باید واضح باشه؛ یه تیکه‌ی دیگه بفرست یا اسمش رو بنویس.";
+  } catch (e) {
+    $("#rec-title").textContent = "⚠️ نشد";
+    $("#rec-sub").textContent = e.message;
+  }
+  $("#rec-actions").hidden = false;
+}
+$("#rec-retry").onclick = runChatRecognition;
+$("#rec-close").onclick = () => ($("#rec-screen").hidden = true);
+
 (async () => {
   const p = new URLSearchParams(location.search);
+  if (p.get("rec")) return runChatRecognition();
   const tid = p.get("t");
-  if (p.get("rec") || p.get("shazam")) {
-    showView("v-listen");
-    $("#listen-status").textContent = "⏳ دریافت فایل...";
-    try {
-      let blob;
-      if (p.get("rec")) {
-        const f = await call("pendingSample");
-        blob = new Blob([b64ToBytes(f.data)], { type: f.mime });
-      } else {
-        blob = (await loadAudio({ id: Number(tid) }, (n, total) => ($("#listen-status").textContent = `⏳ دریافت ${n} از ${total}`))).blob;
-      }
-      await recognizeBlob(blob);
-    } catch (e) {
-      $("#listen-status").textContent = "⚠️ " + e.message;
-    }
-    return;
-  }
   if (!tid) return;
   try {
     const t = await call("track", { id: Number(tid) });
     player.playList([t], 0);
-    const edit = p.get("edit");
-    if (!edit) return;
+    if (!p.get("edit")) return;
     togglePanel("edit", true);
-    const fxName = ["slow", "fast", "bass", "8d", "karaoke", "loud"].includes(edit) ? edit : "";
-    if (edit === "ringtone") setEditMode("ringtone");
-    else if (fxName) {
-      setEditMode("fx");
-      $(`#fx-chips [data-fx="${fxName}"]`)?.click();
-    }
     const a = parseFloat(p.get("a")), b = parseFloat(p.get("b"));
     if (isFinite(a) && isFinite(b)) {
       cut.track = t.id;

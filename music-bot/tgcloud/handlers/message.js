@@ -1,8 +1,8 @@
 // Every incoming message: commands, links, voice/video for recognition, text intents and search.
 import { api } from 'sdk';
 import * as store from '../lib/store.js';
-import { send, doSearch, openLink, runRecognition, sendRemixes } from '../lib/actions.js';
-import { WELCOME, ADMIN_HELP, appButton, webappUrl, audioQualityKeyboard, videoQualityKeyboard, trackName } from '../lib/ui.js';
+import { send, doSearch, openLink, runRecognition, sendRemixes, deliverTrack } from '../lib/actions.js';
+import { WELCOME, ADMIN_HELP, appButton, webappUrl, videoQualityKeyboard, trackName } from '../lib/ui.js';
 import { esc, parseRange } from '../lib/util.js';
 
 const URL_RE = /https?:\/\/\S+/;
@@ -52,7 +52,7 @@ async function command(msg, uid) {
   const cmd = head.split('@')[0].toLowerCase();
   const arg = rest.join(' ').trim();
   if (cmd === '/start') {
-    const app = await appButton('📱 باز کردن مینی‌اپ');
+    const app = await appButton('🎧 باز کردن پلیر');
     // the "🎵 پلیر" button next to the message box opens the Mini App
     await api.setChatMenuButton({ chat_id: msg.chat.id, menu_button: { type: 'web_app', text: '🎵 پلیر', web_app: { url: await webappUrl() } } }).catch(() => {});
     return send(msg.chat.id, WELCOME(msg.from.first_name), app ? { reply_markup: { inline_keyboard: [[app]] } } : {});
@@ -93,10 +93,10 @@ export default async function (msg) {
     const hum = /زمزمه|هامینگ|خوندم|hum/i.test(msg.caption || '');
     const ext = mime.split('/')[1]?.split(';')[0] || 'bin';
     const sample = async () => ({ bytes: await api.getFileContent(media.file_id), name: `sample.${ext}`, mime });
-    return runRecognition(chatId, uid, sample, hum, '?rec=1');
+    return runRecognition(chatId, uid, sample, hum);
   }
 
-  const text = (msg.text || '').trim();
+  let text = (msg.text || '').trim();
   if (!text) return;
   if (text.startsWith('/')) return command(msg, uid);
 
@@ -113,6 +113,9 @@ export default async function (msg) {
   }
 
   const url = text.match(URL_RE);
+  // "@channel Artist" (forwarded / mention noise) -> "Artist"
+  text = text.replace(/(^|\s)@\w+/g, ' ').trim();
+  if (!text) return;
   if (url) return openLink(chatId, uid, url[0]);
 
   // ---- intents about the last track ----
@@ -121,13 +124,13 @@ export default async function (msg) {
   const last = await lastTrack(uid);
   if (last && words.some((w) => CUT_W.has(w))) {
     const range = parseRange(text);
-    const app = await appButton('✂️ باز کردن برش‌زن', `?t=${last.id}&edit=cut${range ? `&a=${range[0]}&b=${range[1]}` : ''}`);
-    return send(chatId, `✂️ برش ${trackName(last)}${range ? ' (بازه انتخاب شد)' : ''}:`, app ? { reply_markup: { inline_keyboard: [[app]] } } : {});
+    const app = await appButton('✂️ برش', `?t=${last.id}&edit=1${range ? `&a=${range[0]}&b=${range[1]}` : ''}`);
+    return send(chatId, `✂️ ${trackName(last)}`, app ? { reply_markup: { inline_keyboard: [[app]] } } : {});
   }
   if (last && !rest.length && words.length) {
     if (words.some((w) => VIDEO_W.has(w))) return send(chatId, `🎬 ${trackName(last)}\nکیفیت ویدیو؟`, { reply_markup: videoQualityKeyboard(last.id) });
     if (words.some((w) => REMIX_W.has(w))) return sendRemixes(chatId, uid, last);
-    if (words.some((w) => AUDIO_W.has(w))) return send(chatId, `🎧 ${trackName(last)}\nکیفیت آهنگ؟`, { reply_markup: audioQualityKeyboard(last.id) });
+    if (words.some((w) => AUDIO_W.has(w))) return deliverTrack(chatId, uid, last);
   }
   let query = rest.length && rest.length < words.length ? rest.join(' ') : text;
   if (words.some((w) => REMIX_W.has(w)) && !/remix/i.test(query)) query += ' remix';

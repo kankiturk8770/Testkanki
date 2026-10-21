@@ -10,6 +10,7 @@ export default async function (input, ctx) {
   const uid = await caller(ctx);
   const bytes = fromBase64(String(input?.data || ''));
   if (bytes.length < 1000) throw new EndpointError('صدایی ضبط نشد', { code: 'EMPTY' });
+  if (bytes.length > 1400 * 1024) throw new EndpointError('فایل بزرگه؛ یه تیکه کوتاه‌تر بفرست', { code: 'TOO_BIG' });
   const mime = String(input?.mime || 'audio/webm').split(';')[0];
   const res = await recognize({ bytes, mime, name: `rec.${mime.split('/')[1] || 'webm'}` }, { hum: !!input?.hum });
   const query = res.match ? queryOf(res.match) : res.lyricHits[0] ? queryOf(res.lyricHits[0]) : res.transcript;

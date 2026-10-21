@@ -1,9 +1,7 @@
-// Inline keyboards and texts of the chat bot.
+// Inline keyboards and texts of the chat bot. Every keyboard is short: one main row, the rest behind "⋯".
 import { getSetting } from './store.js';
 import { esc, fmtTime } from './util.js';
 import { AUDIO_QUALITIES, VIDEO_QUALITIES } from './sources.js';
-
-const ICON = { youtube: '▶️', soundcloud: '☁️', radiojavan: '📻', saavn: '🎶' };
 
 export const btn = (text, data) => ({ text, callback_data: data });
 
@@ -26,37 +24,30 @@ export function trackName(t) {
   return esc(t.artist ? `${t.artist} - ${t.title}` : t.title);
 }
 
-export async function resultsKeyboard(tracks, withApp = true) {
-  const rows = tracks.slice(0, 10).map((t) => {
+/** Search results: one button per song; a tap sends the song. */
+export async function resultsKeyboard(tracks) {
+  const rows = tracks.slice(0, 8).map((t) => {
     const name = t.artist ? `${t.artist} - ${t.title}` : t.title;
-    return [btn(`${ICON[t.source] || '🌐'} ${name.slice(0, 44)} · ${fmtTime(t.duration)}`, `t:${t.id}`)];
+    return [btn(`🎵 ${name.slice(0, 46)} · ${fmtTime(t.duration)}`, `t:${t.id}`)];
   });
-  if (withApp) rows.push([await appButton('🎵 باز کردن در پلیر')]);
+  rows.push([await appButton('🎧 باز کردن در پلیر')]);
   return kb(rows);
 }
 
-// Every keyboard is one row; the rest lives behind "⋯" (callback mo:<tid>:<where>, back with bk:…).
-// where = c (track card) | a (under a sent audio)
-
-export async function cardKeyboard(tid, liked, isLink = false) {
-  if (isLink) return kb([[btn('🔍 این چه آهنگیه؟', `rec:${tid}`), btn('🎧 صدا', `aq:${tid}:192`), btn('🎬 ویدیو', `v:${tid}`)]]);
-  return kb([[btn('🎧 دانلود آهنگ', `a:${tid}`), btn('🎬 ویدیو', `v:${tid}`), btn('⋯', `mo:${tid}:c`)]]);
+/** Under every song the bot sends. where: a (audio message). */
+export async function songKeyboard(tid) {
+  return kb([[await appButton('✂️ برش', `?t=${tid}&edit=1`), btn('⋯', `mo:${tid}`)]]);
 }
 
-/** Under every audio the bot sends: one "edit" button (the editor is in the Mini App) and "⋯". */
-export async function editKeyboard(tid) {
-  return kb([[await appButton('✂️ ویرایش / رینگتون / افکت', `?t=${tid}&edit=1`), btn('⋯', `mo:${tid}:a`)]]);
-}
-
-export async function moreKeyboard(tid, where, liked) {
+export async function moreKeyboard(tid, liked) {
   return kb([
-    [btn('🔁 ریمیکس‌ها', `rx:${tid}`), btn(liked ? '❤️' : '🤍', `lk:${tid}:${where}`), btn('➕ پلی‌لیست', `pl:${tid}`)],
-    [where === 'a' ? btn('🎬 ویدیو', `v:${tid}`) : btn('🎙 ویس', `vo:${tid}`), await appButton('🎵 پلیر', `?t=${tid}`), btn('🔙', `bk:${tid}:${where}`)],
+    [btn('🎬 ویدیو', `v:${tid}`), btn('🔁 ریمیکس‌ها', `rx:${tid}`), btn('🎚 کیفیت', `q:${tid}`)],
+    [btn('➕ پلی‌لیست', `pl:${tid}`), btn(liked ? '❤️' : '🤍', `lk:${tid}`), await appButton('🎧 پلیر', `?t=${tid}`), btn('🔙', `bk:${tid}`)],
   ]);
 }
 
-export function audioQualityKeyboard(tid) {
-  return kb([[...AUDIO_QUALITIES.map((q) => btn(q, `aq:${tid}:${q}`)), btn('🎙 ویس', `vo:${tid}`)]]);
+export function qualityKeyboard(tid) {
+  return kb([[...AUDIO_QUALITIES.map((q) => btn(`${q}k`, `aq:${tid}:${q}`)), btn('🎙 ویس', `vo:${tid}`), btn('🔙', `mo:${tid}`)]]);
 }
 
 export function videoQualityKeyboard(tid) {
@@ -71,23 +62,18 @@ export function playlistPicker(tid, lists) {
 }
 
 export const WELCOME = (name) =>
-  `سلام ${esc(name)} 👋\n\n` +
-  '🎵 <b>اسم آهنگ</b>، خواننده یا یه تیکه از متن رو بنویس تا از یوتیوب و ساندکلاد پیداش کنم.\n' +
-  '🎙 <b>ویس</b> بفرست (آهنگی که پخش میشه، یا خودت بخون/زمزمه کن) تا بگم چه آهنگیه.\n' +
-  '🎬 <b>ویدیو، ویدیو مسیج یا لینک</b> (اینستا، تیک‌تاک، یوتیوب…) بفرست تا آهنگش رو پیدا کنم.\n' +
-  '✂️ زیر هر آهنگ: برش، رینگتون، اسلو، تند، باس، 8D و بی‌کلام.\n' +
-  '💬 می‌تونی بنویسی «<i>آهنگشو بفرست</i>»، «<i>ویدیوشو بفرست</i>»، «<i>ریمیکساش</i>».\n\n' +
-  '📱 پلیر، پلی‌لیست‌ها، تاریخچه و «گوش بده» تو <b>مینی‌اپ</b> هست.';
+  `سلام ${esc(name)} 👋 به <b>Kanki Music</b> خوش اومدی 🎧\n\n` +
+  '🔎 اسم آهنگ یا خواننده رو بنویس\n' +
+  '📝 یا یه تیکه از متن آهنگ\n' +
+  '🔗 یا لینک بفرست (اینستاگرام، تیک‌تاک، یوتیوب…)\n' +
+  '🎙 یا ویس بفرست؛ آهنگی که پخش میشه یا خودت می‌خونی\n\n' +
+  'خودم پیداش می‌کنم و برات می‌فرستم ✨';
 
 export const ADMIN_HELP =
-  '⚙️ <b>تنظیمات (فقط ادمین)</b>\n' +
-  '<code>/set webapp_url https://appXXXX.tgcloud.ai/</code> — آدرس مینی‌اپ (push چاپش می‌کنه)\n' +
-  '<code>/set audd_token …</code> — تشخیص آهنگ (audd.io)\n' +
-  '<code>/set acr_host identify-eu-west-1.acrcloud.com</code>\n' +
-  '<code>/set acr_key …</code> و <code>/set acr_secret …</code> — ACRCloud\n' +
-  '<code>/set acr_hum_key …</code> و <code>/set acr_hum_secret …</code> — تشخیص زمزمه\n' +
-  '<code>/set stt_key …</code> — Groq/OpenAI Whisper (آواز ← متن)؛ اختیاری: <code>stt_url</code>، <code>stt_model</code>\n' +
-  '<code>/set genius_token …</code> — پیدا کردن آهنگ از روی متن\n' +
-  '<code>/set cobalt_url https://…</code> و <code>/set cobalt_key …</code> — سرویس دانلود (یوتیوب ۳۲۰، ویدیو ۷۲۰/۱۰۸۰، اینستا، تیک‌تاک)\n' +
-  '<code>/unset نام</code> — پاک کردن · <code>/settings</code> — وضعیت\n' +
-  '📦 کانال ذخیره: ربات رو ادمین یه کانال خصوصی کن و تو کانال بنویس <code>/storage</code>';
+  '⚙️ <b>تنظیمات</b>\n' +
+  '<code>/set audd_token …</code> — تشخیص آهنگ مستقیم تو چت (audd.io)\n' +
+  '<code>/set acr_key …</code> + <code>/set acr_secret …</code> (+ <code>acr_host</code>) — ACRCloud\n' +
+  '<code>/set acr_hum_key …</code> + <code>/set acr_hum_secret …</code> — تشخیص زمزمه\n' +
+  '<code>/set stt_key …</code> — Groq Whisper (آواز ← متن)\n' +
+  '<code>/set cobalt_url https://…</code> — دانلود ویدیوی یوتیوب\n' +
+  '<code>/settings</code> — وضعیت · <code>/unset نام</code> — پاک کردن';

@@ -4,7 +4,8 @@ import { audioBytes } from '../lib/deliver.js';
 import { toBase64 } from '../lib/util.js';
 import { caller, trackOrFail, failure } from '../lib/webapp.js';
 
-const CHUNK = 1536 * 1024;
+// An endpoint's response is capped at ~2 MB; 1 MB of audio is ~1.4 MB of base64.
+const CHUNK = 1024 * 1024;
 
 export default async function (input, ctx) {
   const uid = await caller(ctx);

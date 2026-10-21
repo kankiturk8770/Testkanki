@@ -2,7 +2,7 @@
 import { api, InputFile } from 'sdk';
 import { cachedFile, cacheFile, anyCachedAudio, getSetting } from './store.js';
 import { downloadAudio, downloadVideo, VIDEO_QUALITIES } from './sources.js';
-import { editKeyboard } from './ui.js';
+import { songKeyboard } from './ui.js';
 
 const UPLOAD_MAX = 50 * 1024 * 1024;
 
@@ -19,7 +19,7 @@ export async function sendAudio(chatId, track, kbps = '192', { silent = false, m
   const extra = {
     chat_id: chatId,
     disable_notification: silent,
-    ...(markup ? { reply_markup: await editKeyboard(track.id) } : {}),
+    ...(markup ? { reply_markup: await songKeyboard(track.id) } : {}),
   };
   const cached = await cachedFile(track.id, variant);
   if (cached) return api.sendAudio({ ...extra, audio: cached.fileId });
@@ -31,7 +31,7 @@ export async function sendAudio(chatId, track, kbps = '192', { silent = false, m
     title: track.title,
     performer: track.artist || undefined,
     duration: track.duration || undefined,
-    ...(file.alt ? { caption: `ℹ️ نسخه‌ی ${track.source} قابل دانلود نبود؛ این نسخه از ${file.alt.source} فرستاده شد:\n${[file.alt.artist, file.alt.title].filter(Boolean).join(' - ')}` } : {}),
+    ...(file.alt ? { caption: `ℹ️ این نسخه در دسترس نبود؛ نزدیک‌ترین نسخه رو فرستادم:\n${[file.alt.artist, file.alt.title].filter(Boolean).join(' - ')}` } : {}),
   });
   const audio = msg.audio || msg.document;
   if (audio) await cacheFile(track.id, variant, audio.file_id, file.bytes.length);

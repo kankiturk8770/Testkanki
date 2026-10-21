@@ -1,10 +1,10 @@
 // Inline button presses.
-import { api } from 'sdk';
+import { api, InputFile } from 'sdk';
 import * as store from '../lib/store.js';
-import { sendAudio, sendVideo, sendVoice } from '../lib/deliver.js';
-import { send, showCard, sendRemixes, withProgress, recognizeTrack } from '../lib/actions.js';
-import { audioQualityKeyboard, videoQualityKeyboard, playlistPicker, cardKeyboard, editKeyboard, moreKeyboard, trackName } from '../lib/ui.js';
-import { AUDIO_QUALITIES, MUSIC_SOURCES } from '../lib/sources.js';
+import { sendVideo, sendVoice } from '../lib/deliver.js';
+import { send, sendRemixes, withProgress, deliverTrack } from '../lib/actions.js';
+import { qualityKeyboard, videoQualityKeyboard, playlistPicker, songKeyboard, moreKeyboard, trackName } from '../lib/ui.js';
+import { AUDIO_QUALITIES, linkInfo, linkVideo } from '../lib/sources.js';
 
 async function setMarkup(cb, chatId, reply_markup) {
   try {
@@ -12,8 +12,9 @@ async function setMarkup(cb, chatId, reply_markup) {
   } catch {}
 }
 
+// a late answer (slow job, old button) is harmless: never let it stop the action itself
 const answer = (cb, text, alert = false) =>
-  api.answerCallbackQuery({ callback_query_id: cb.id, ...(text ? { text, show_alert: alert } : {}) });
+  api.answerCallbackQuery({ callback_query_id: cb.id, ...(text ? { text, show_alert: alert } : {}) }).catch(() => {});
 
 export default async function (cb) {
   const uid = cb.from.id;
@@ -28,18 +29,26 @@ export default async function (cb) {
   };
 
   switch (op) {
-    case 't': {
+    case 't': { // a search result: send the song right away
       const t = await track(a);
       if (!t) return;
       await answer(cb);
-      await store.log(uid, 'open', null, t.id);
-      return showCard(chatId, uid, t);
+      return deliverTrack(chatId, uid, t);
     }
-    case 'a': {
+    case 'mo': // "⋯" under a song
+      await answer(cb);
+      return setMarkup(cb, chatId, await moreKeyboard(Number(a), (await store.likedIds(uid)).has(Number(a))));
+    case 'bk':
+      await answer(cb);
+      return setMarkup(cb, chatId, await songKeyboard(Number(a)));
+    case 'q':
+      await answer(cb);
+      return setMarkup(cb, chatId, qualityKeyboard(Number(a)));
+    case 'aq': {
       const t = await track(a);
       if (!t) return;
       await answer(cb);
-      return send(chatId, `🎧 ${trackName(t)}\nکیفیت آهنگ؟`, { reply_markup: audioQualityKeyboard(t.id) });
+      return deliverTrack(chatId, uid, t, AUDIO_QUALITIES.includes(b) ? b : '192');
     }
     case 'v': {
       const t = await track(a);
@@ -47,28 +56,28 @@ export default async function (cb) {
       await answer(cb);
       return send(chatId, `🎬 ${trackName(t)}\nکیفیت ویدیو؟`, { reply_markup: videoQualityKeyboard(t.id) });
     }
-    case 'aq': {
-      const t = await track(a);
-      if (!t) return;
-      const q = AUDIO_QUALITIES.includes(b) ? b : '192';
-      await answer(cb, 'در حال دانلود...');
-      await store.setState(uid, 'last', t.id);
-      await store.log(uid, 'download', `audio ${q}`, t.id);
-      return withProgress(chatId, `⏳ دانلود آهنگ (${q})...`, () => sendAudio(chatId, t, q));
-    }
     case 'vq': {
       const t = await track(a);
       if (!t) return;
-      await answer(cb, 'در حال دانلود...');
+      await answer(cb);
       await store.log(uid, 'download', `video ${b}`, t.id);
-      return withProgress(chatId, `⏳ دانلود ویدیو ${b}p...`, () => sendVideo(chatId, t, b));
+      return withProgress(chatId, `⏳ 🎬 ${trackName(t)} · ${b}p`, () => sendVideo(chatId, t, b));
+    }
+    case 'lv': { // video of an Instagram / TikTok post
+      const t = await track(a);
+      if (!t) return;
+      await answer(cb);
+      return withProgress(chatId, '⏳ 🎬', async () => {
+        const bytes = await linkVideo(await linkInfo(t.url));
+        await api.sendVideo({ chat_id: chatId, video: new InputFile(bytes, 'video.mp4', { type: 'video/mp4' }), supports_streaming: true });
+      });
     }
     case 'vo': {
       const t = await track(a);
       if (!t) return;
       await answer(cb);
       await store.log(uid, 'download', 'voice', t.id);
-      return withProgress(chatId, '⏳ ساخت ویس...', () => sendVoice(chatId, t));
+      return withProgress(chatId, '⏳ 🎙', () => sendVoice(chatId, t));
     }
     case 'rx': {
       const t = await track(a);
@@ -76,28 +85,14 @@ export default async function (cb) {
       await answer(cb);
       return sendRemixes(chatId, uid, t);
     }
-    case 'rec': {
-      const t = await track(a);
-      if (!t) return;
-      await answer(cb, 'دارم آهنگش رو تشخیص می‌دم...');
-      return withProgress(chatId, '⏳ دریافت صدای ویدیو...', () => recognizeTrack(chatId, uid, t));
-    }
     case 'lk': {
       const liked = await store.toggleLike(uid, Number(a));
       await answer(cb, liked ? '❤️ به علاقه‌مندی‌ها اضافه شد' : 'از علاقه‌مندی‌ها حذف شد');
-      if (b) await setMarkup(cb, chatId, await moreKeyboard(Number(a), b, liked));
-      return;
+      return setMarkup(cb, chatId, await moreKeyboard(Number(a), liked));
     }
-    case 'mo': // "⋯": swap the row for the extra actions
-      await answer(cb);
-      return setMarkup(cb, chatId, await moreKeyboard(Number(a), b, (await store.likedIds(uid)).has(Number(a))));
-    case 'bk':
-      await answer(cb);
-      if (b === 'a') return setMarkup(cb, chatId, await editKeyboard(Number(a)));
-      return setMarkup(cb, chatId, await cardKeyboard(Number(a), false, !MUSIC_SOURCES.includes((await store.getTrack(a))?.source)));
     case 'pl':
       await answer(cb);
-      return send(chatId, 'به کدوم پلی‌لیست اضافه بشه؟', { reply_markup: playlistPicker(Number(a), await store.playlists(uid)) });
+      return send(chatId, '📁 به کدوم پلی‌لیست اضافه بشه؟', { reply_markup: playlistPicker(Number(a), await store.playlists(uid)) });
     case 'pa':
       if (!(await store.ownsPlaylist(uid, a))) return answer(cb, 'پلی‌لیست پیدا نشد', true);
       await store.addToPlaylist(Number(a), Number(b));
