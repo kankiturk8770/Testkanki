@@ -2,7 +2,7 @@
 // song the user means, send the song itself; buttons are for "other versions", not for the next step.
 import { api, BotApiError } from 'sdk';
 import * as store from './store.js';
-import { search, remixes, fromUrl, linkInfo, linkSound, bestMatches, youtubeId } from './sources.js';
+import { search, remixes, fromUrl, linkInfo, linkSound, bestMatches, songMatch, youtubeId } from './sources.js';
 import { shazamBytes } from './shazam.js';
 import { recognize, queryOf } from './recognize.js';
 import { sendAudio, TooBig } from './deliver.js';
@@ -59,7 +59,8 @@ export async function sendSong(chatId, userId, want, { status = null, kind = 're
   const note = `🎵 ${label}\n⏳`;
   status = status ? (await edit(status, note), status) : await send(chatId, note);
   let found = await bestMatches(want);
-  if (!found.length) found = (await search(queryOf(want), 3)).slice(0, 1); // nothing close: the top result
+  // nothing on the full-file sources: the same song from the merged search (never a different one)
+  if (!found.length) found = (await search(queryOf(want), 8)).filter((t) => songMatch(want, t) >= 0).slice(0, 2);
   const rows = await store.upsertTracks(found);
   await store.log(userId, kind, queryOf(want), rows[0]?.id ?? null);
   for (let i = 0; i < Math.min(3, found.length); i++) {
@@ -72,7 +73,7 @@ export async function sendSong(chatId, userId, want, { status = null, kind = 're
       console.warn('send failed', t.key, e.message);
     }
   }
-  return edit(status, `🎵 ${label}\n😕 فایل این آهنگ رو پیدا نکردم.`);
+  return edit(status, `🎵 ${label}\n😕 ${found.some((t) => t.source === 'youtube') ? 'نسخه‌ی اصلی این آهنگ فقط تو یوتیوبه و فعلاً فایلش رو نمی‌تونم بگیرم.' : 'فایل این آهنگ رو پیدا نکردم.'}`);
 }
 
 export async function doSearch(chatId, userId, query) {

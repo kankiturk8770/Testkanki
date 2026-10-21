@@ -43,7 +43,7 @@ function parseLength(text) {
 
 const YT_WEB = { clientName: 'WEB', clientVersion: '2.20250101.00.00', hl: 'en' };
 
-async function ytSearch(query, limit) {
+export async function ytSearch(query, limit) {
   const res = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': UA },
@@ -176,7 +176,9 @@ async function scApi(path) {
   for (const refresh of [false, true]) {
     const cid = await scClientId(refresh);
     const sep = path.includes('?') ? '&' : '?';
-    const res = await fetch(`https://api-v2.soundcloud.com${path}${sep}client_id=${cid}`, { headers: { 'User-Agent': UA } });
+    const url = `https://api-v2.soundcloud.com${path}${sep}client_id=${cid}`;
+    // the connection to SoundCloud drops now and then: one more try
+    const res = await fetch(url, { headers: { 'User-Agent': UA } }).catch(() => fetch(url, { headers: { 'User-Agent': UA } }));
     if (res.status === 401 || res.status === 403) continue;
     if (!res.ok) throw new Error(`soundcloud ${res.status}`);
     return res.json();
@@ -441,31 +443,94 @@ function similarity(a, b) {
   return hit / Math.min(A.size, B.size);
 }
 
+// Words that say nothing about which song it is.
+const NOISE = new Set(['official', 'oficial', 'resmi', 'audio', 'video', 'videoclip', 'clip', 'klip', 'music', 'musica', 'lyrics',
+  'lyric', 'letra', 'hd', 'hq', '4k', 'visualizer', 'mv', 'full', 'version', 'original', 'new', 'song', 'track', 'prod', 'by', 'ft',
+  'feat', 'featuring', 'the', 'remastered', 'remaster', 'explicit', 'clean', 'dirty', 'raw', 'radio', 'riddim', 'kayit', 'm4a', 'mp3',
+  'آهنگ', 'موزیک', 'ویدیو', 'جدید', 'رسمی']);
+const VERSION = /remix|ریمیکس|rmx|slowed|sped\s*up|\blive\b|لایو|\bcover(?:ed)?\b|کاور|lo-?fi|acoustic|karaoke|instrumental|بی\s*کلام|bootleg|mashup|nightcore|\b8d\b|reverb|\bedit\b|\bflip\b|rework|\bvip\b|refix|tribute|parody|piano|guitar|violin|bass\s*boost|phonk|\bdub\b|extended|\bmix\b/i;
+const compact = (s) => [...words(s)].join('');
+const brackets = (t) => [...String(t || '').matchAll(/[(\[{]([^)\]}]*)[)\]}]/g)].map((m) => m[1]);
+
+// Title words without the artists' names and without noise.
+function titleWords(title, ...artists) {
+  const drop = new Set(artists.flatMap((a) => [...words(a)]));
+  const all = [...words(cleanTitle(title) || title)].filter((w) => !NOISE.has(w));
+  const core = all.filter((w) => !drop.has(w));
+  return new Set(core.length ? core : all);
+}
+
+// The part of a title that names a version ("DaBaby Remix", "Slowed + Reverb", "Live"), or null.
+function versionTag(title) {
+  const t = String(title || '');
+  const segs = [...brackets(t), ...t.split(/\s[–—-]\s/).slice(1)];
+  // "(by X)", "(Ebi - Covered by X)": someone else singing it
+  if (segs.some((x) => /\bcover(?:ed)?\b|کاور/i.test(x) || (/\bby\b/i.test(x) && !/\bprod/i.test(x)))) return 'cover';
+  return segs.find((x) => VERSION.test(x)) ?? (VERSION.test(t) ? t : null);
+}
+
+function sameVersion(wantTitle, title) {
+  const a = versionTag(wantTitle), b = versionTag(title);
+  if (!a || !b) return !a && !b;
+  if (VERSION.exec(a)?.[0].toLowerCase() !== VERSION.exec(b)?.[0].toLowerCase()) return false;
+  // "DaBaby Remix" is not "jeonghyeon Remix"
+  const B = words(b);
+  return [...words(a)].filter((w) => !NOISE.has(w) && !VERSION.test(w)).every((w) => B.has(w));
+}
+
+// Every artist the user asked for ("A & B feat. C") must show up in the candidate's artist or title.
+function artistMatch(wantArtist, t) {
+  if (!wantArtist) return true;
+  const names = String(wantArtist).split(/\s*(?:,|&|\+|\/|\s+x\s+|\s+and\s+|\s+feat\.?\s+|\s+ft\.?\s+|\s+with\s+|،|\s+و\s+)\s*/i).filter((n) => words(n).size);
+  const hay = words(`${t.artist || ''} ${t.title || ''}`);
+  const flat = compact(`${t.artist || ''} ${t.title || ''}`);
+  const hit = (n) => [...words(n)].every((w) => hay.has(w)) || (compact(n).length >= 4 && flat.includes(compact(n)));
+  // the main artist is required; with several, at least half of them
+  return hit(names[0] || wantArtist) || names.filter(hit).length * 2 >= names.length;
+}
+
+/**
+ * Is t the song `want` is? The title must match both ways (no "I Need A Doctor" for "Dr. Doctor"),
+ * the artist must be the same (no covers by someone else) and the version too (no remix for the
+ * original, no other DJ's remix). -> score (higher is closer) or -1.
+ */
+export function songMatch(want, t) {
+  const W = titleWords(want.title, want.artist), T = titleWords(t.title, t.artist, want.artist);
+  if (!W.size || !T.size) return -1;
+  let hit = 0;
+  for (const w of W) if (T.has(w)) hit++;
+  const recall = hit / W.size, precision = hit / T.size;
+  if (recall < 0.75 || precision < 0.6) return -1;
+  if (!artistMatch(want.artist, t)) return -1;
+  // a credited collaboration led by someone else ("X ft. <artist>", "X, <artist>") is X's version
+  const credits = String(t.artist || '').split(/\s*(?:,|&|\s+x\s+|\s+feat\.?\s+|\s+ft\.?\s+|\s+with\s+)\s*/i).filter((n) => words(n).size);
+  if (want.artist && credits.length > 1 && !artistMatch(credits[0], { title: want.artist })) return -1;
+  // YouTube's split can leave the version on the "artist" side ("EBI Live in Toronto - Khalij")
+  const own = [...words(t.artist)].every((w) => words(want.artist).has(w));
+  if (!sameVersion(want.title, own ? t.title : `${t.title} (${t.artist || ''})`)) return -1;
+  let score = recall * 2 + precision * 2;
+  // other bracketed extras ("(Kiss Kiss)", "(Turkish version)"): fine, but the plain one first
+  const known = new Set([...words(want.title), ...words(want.artist), ...words(t.artist)]);
+  for (const x of brackets(t.title)) {
+    if (/^\s*(?:feat|ft|featuring|with|prod|from)\b/i.test(x)) continue;
+    if ([...words(x)].some((w) => !known.has(w) && !NOISE.has(w) && !/^\d+$/.test(w))) score -= 1;
+  }
+  if (want.duration && t.duration && Math.abs(want.duration - t.duration) > 25) score -= 1;
+  return score;
+}
+
 /** The same song on sources that serve full files (for YouTube / DRM / deleted uploads), best first. */
 export async function alternatives(track) {
-  const title = cleanTitle(track.title);
-  const remix = /remix|ریمیکس|mix\b/i.test(track.title) ? (track.title.match(/[(\[]([^)\]]*remix[^)\]]*)[)\]]/i)?.[1] || 'remix') : '';
-  const queries = [...new Set([`${track.artist || ''} ${title} ${remix}`.trim(), `${track.artist || ''} ${title}`.trim(), title])];
+  const title = cleanTitle(track.title) || track.title;
+  const main = String(track.artist || '').split(/\s*(?:,|&|\s+x\s+|\s+feat\.?\s+|\s+ft\.?\s+)\s*/i)[0];
+  const queries = [...new Set([`${track.artist || ''} ${track.title}`.trim(), `${main} ${title}`.trim(), title])];
   const found = (await Promise.all(queries.map((q) => Promise.all([
     safeList('sc', scSearch(q, 6)), safeList('rj', rjSearch(q, 4)), safeList('saavn', saavnSearch(q, 4)),
   ])))).flat(2);
-  // Same core title required. Then: the same remix > the original by the same artist > another version.
-  const remixName = [...words(remix)].filter((w) => !['remix', 'mix', 'ریمیکس'].includes(w));
-  const isRemix = (t) => /remix|ریمیکس|\bmix\b|edit|cover|bootleg/i.test(t);
-  const scored = [];
-  const seen = new Set();
-  for (const f of found) {
-    if (f.key === track.key || seen.has(f.key)) continue;
-    seen.add(f.key);
-    if (similarity(title, cleanTitle(f.title)) < 0.6) continue;
-    const fw = words(`${f.artist || ''} ${f.title}`);
-    let score = similarity(track.artist, f.artist) >= 0.5 ? 2 : 0;
-    if (remixName.length && remixName.every((w) => fw.has(w))) score += 4;
-    else if (isRemix(f.title)) score -= remix ? 1 : 3;
-    if (track.duration && f.duration) score += Math.abs(f.duration - track.duration) <= 15 ? 1 : 0;
-    scored.push({ f, score });
-  }
-  return scored.sort((a, b) => b.score - a.score).slice(0, 4).map((x) => x.f);
+  const seen = new Set([track.key]);
+  return found.filter((f) => !seen.has(f.key) && seen.add(f.key))
+    .map((f) => ({ f, score: songMatch(track, f) })).filter((x) => x.score >= 0)
+    .sort((a, b) => b.score - a.score).slice(0, 4).map((x) => x.f);
 }
 
 async function audioFrom(track, kbps) {
@@ -499,7 +564,7 @@ export async function downloadAudio(track, kbps = '192') {
     }
   }
   throw new Error(track.source === 'youtube' || CATALOG.includes(track.source)
-    ? 'این آهنگ فقط تو یوتیوب هست و یوتیوب دانلود از سرور رو بسته؛ یه نسخه‌ی دیگه از نتایج رو امتحان کن'
+    ? 'این آهنگ فقط تو یوتیوبه و فعلاً فایلش رو نمی‌تونم بگیرم'
     : String(first?.message || first));
 }
 
@@ -624,26 +689,23 @@ export async function linkSound(info) {
  */
 export async function bestMatches(want, limit = 5) {
   const title = cleanTitle(want.title) || want.title;
-  const q = `${want.artist || ''} ${title}`.trim();
-  const lists = await Promise.all([
-    safeList('rj', rjSearch(q, 5)), safeList('sc', scSearch(q, 6)), safeList('saavn', saavnSearch(q, 4)), safeList('yt', ytSearch(q, 5)),
-  ]);
-  const wantVersion = /remix|ریمیکس|slowed|sped|live|cover|lofi|acoustic/i.exec(want.title)?.[0]?.toLowerCase();
+  const main = String(want.artist || '').split(/\s*(?:,|&|\s+x\s+|\s+feat\.?\s+|\s+ft\.?\s+)\s*/i)[0];
+  const qs = [...new Set([`${want.artist || ''} ${want.title}`.trim(), `${main} ${title}`.trim()])];
+  const lists = await Promise.all(qs.flatMap((q) => [
+    safeList('rj', rjSearch(q, 5)), safeList('sc', scSearch(q, 8)), safeList('saavn', saavnSearch(q, 5)), safeList('yt', ytSearch(q, 5)),
+  ]));
   // YouTube serves only ~1 MB to servers unless a cobalt instance is set: pick it last
   const ytUsable = !!(await getSetting('cobalt_url'));
-  const sourceRank = { radiojavan: 1, saavn: 0.9, soundcloud: 0.7, youtube: ytUsable ? 0.2 : -1.5 };
-  const scored = lists.flat().map((t) => {
-    let score = similarity(title, cleanTitle(t.title)) * 4;
-    if (want.artist) score += similarity(want.artist, `${t.artist || ''} ${t.title}`) * 2;
-    const version = /remix|ریمیکس|slowed|sped|live|cover|lofi|acoustic|karaoke|instrumental/i.exec(t.title)?.[0]?.toLowerCase();
-    if (version && version !== wantVersion) score -= 2;
-    if (wantVersion && version === wantVersion) score += 1.5;
-    score += sourceRank[t.source] || 0;
-    return { t, score };
-  });
+  const sourceRank = { radiojavan: 0.6, saavn: 0.5, soundcloud: 0.4, youtube: ytUsable ? 0.3 : -0.5 };
+  // Persian names vs RadioJavan's Latin spelling can't be compared word by word: trust its top hit
+  const otherScript = (t) => /[\u0600-\u06ff]/.test(`${want.artist || ''} ${want.title}`) && !/[\u0600-\u06ff]/.test(`${t.artist || ''} ${t.title}`);
+  const rjTop = new Set(lists.filter((l) => l[0]?.source === 'radiojavan').map((l) => l[0].key));
   const seen = new Set();
-  return scored.filter((x) => x.score >= 3).sort((a, b) => b.score - a.score)
-    .map((x) => x.t).filter((t) => !seen.has(t.key) && seen.add(t.key)).slice(0, limit);
+  return lists.flat().filter((t) => !seen.has(t.key) && seen.add(t.key))
+    .map((t) => ({ t, score: Math.max(songMatch(want, t), rjTop.has(t.key) && otherScript(t) && !versionTag(t.title) ? 4.5 : -1) }))
+    .filter((x) => x.score >= 0)
+    .map((x) => ({ t: x.t, score: x.score + (sourceRank[x.t.source] || 0) }))
+    .sort((a, b) => b.score - a.score).map((x) => x.t).slice(0, limit);
 }
 
 /** Raw media of a link (Instagram reel, TikTok, …) for song recognition; needs cobalt. */
