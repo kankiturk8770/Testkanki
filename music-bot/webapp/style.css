@@ -328,3 +328,4 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .qline { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .top-actions { display: flex; align-items: center; gap: 6px; }
 .bot-pill { padding: 5px 11px; font-size: .78rem; color: var(--gold-light); }
+.logo-img { width: 34px; height: 34px; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--gold) 50%, transparent)); }

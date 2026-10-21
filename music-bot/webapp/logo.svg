@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="70%">
+      <stop offset="0" stop-color="#2a1d05"/>
+      <stop offset=".55" stop-color="#0b0802"/>
+      <stop offset="1" stop-color="#000"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF2B8"/>
+      <stop offset=".45" stop-color="#FFC72C"/>
+      <stop offset="1" stop-color="#C98208"/>
+    </linearGradient>
+    <linearGradient id="goldSide" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFE27A"/>
+      <stop offset=".5" stop-color="#FFC72C"/>
+      <stop offset="1" stop-color="#E09A10"/>
+    </linearGradient>
+    <linearGradient id="inner" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c1404"/>
+      <stop offset="1" stop-color="#050300"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".35"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="innerClip"><path d="M256 104 L384 144 Q378 318 256 414 Q134 318 128 144 Z"/></clipPath>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <!-- gold dust -->
+  <g fill="#FFE27A">
+    <circle cx="70" cy="96" r="2.2" opacity=".7"/><circle cx="448" cy="80" r="1.6" opacity=".6"/>
+    <circle cx="430" cy="420" r="2" opacity=".55"/><circle cx="84" cy="402" r="1.6" opacity=".5"/>
+    <circle cx="466" cy="250" r="1.4" opacity=".5"/><circle cx="40" cy="262" r="1.4" opacity=".45"/>
+    <circle cx="140" cy="468" r="1.2" opacity=".4"/><circle cx="372" cy="470" r="1.2" opacity=".4"/>
+  </g>
+  <!-- orbit ring -->
+  <ellipse cx="256" cy="262" rx="214" ry="214" fill="none" stroke="#FFC72C" stroke-opacity=".22" stroke-width="2" stroke-dasharray="2 10"/>
+
+  <!-- shield -->
+  <g filter="url(#glow)">
+    <path d="M256 70 L414 120 Q408 336 256 450 Q104 336 98 120 Z" fill="url(#goldSide)"/>
+  </g>
+  <path d="M256 70 L414 120 Q408 336 256 450 Q104 336 98 120 Z" fill="none" stroke="#FFF2B8" stroke-opacity=".8" stroke-width="3"/>
+  <path d="M256 104 L384 144 Q378 318 256 414 Q134 318 128 144 Z" fill="url(#inner)"/>
+  <path d="M256 104 L384 144 Q378 318 256 414 Q134 318 128 144 Z" fill="none" stroke="#FFC72C" stroke-opacity=".55" stroke-width="2"/>
+
+  <!-- K built from a music note: the stem is the K's spine, the note head sits at its foot,
+       the upper arm is the note's flag -->
+  <g filter="url(#soft)">
+    <rect x="214" y="150" width="30" height="168" rx="7" fill="url(#gold)"/>
+    <ellipse cx="206" cy="322" rx="36" ry="26" transform="rotate(-22 206 322)" fill="url(#gold)"/>
+    <path d="M244 236 L322 166 Q334 158 342 168 L346 174 Q350 184 340 192 L266 256 Z" fill="url(#gold)"/>
+    <path d="M262 244 L334 318 Q340 326 333 333 L326 340 Q318 346 310 338 L242 268 Z" fill="url(#gold)"/>
+  </g>
+  <!-- three equaliser bars under the K -->
+  <g fill="#FFC72C" filter="url(#soft)">
+    <rect x="236" y="362" width="9" height="18" rx="4.5" opacity=".75"/>
+    <rect x="252" y="352" width="9" height="28" rx="4.5"/>
+    <rect x="268" y="366" width="9" height="14" rx="4.5" opacity=".6"/>
+  </g>
+  <!-- gloss on the top half of the shield -->
+  <path d="M256 74 L410 122 Q409 190 400 232 Q330 200 256 206 Q182 200 112 232 Q103 190 102 122 Z" fill="url(#gloss)" opacity=".55"/>
+</svg>
