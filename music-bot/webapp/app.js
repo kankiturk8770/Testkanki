@@ -4,6 +4,8 @@
 const tg = window.Telegram?.WebApp;
 tg?.ready();
 tg?.expand();
+// Telegram's "swipe down to minimise" fights with scrolling the lists
+tg?.disableVerticalSwipes?.();
 tg?.setHeaderColor?.("#000000");
 tg?.setBackgroundColor?.("#000000");
 
@@ -243,6 +245,7 @@ const player = {
     if (i < 0 || i >= this.queue.length) return;
     this.idx = i;
     this.cur = this.queue[i];
+    viz.track(this.cur);
     const t = this.cur;
     const seq = ++this.loadSeq;
     stopPreview();
@@ -398,9 +401,84 @@ async function songBlob(t) {
   return (await loadAudio(t)).blob;
 }
 
+/* ---------------- player spectrum: mirrored bars in the theme colours, also a seek bar ---------------- */
+const viz = (() => {
+  const c = $("#viz"), g = c.getContext("2d");
+  const N = 64;
+  let raf = 0, amp = 0, seed = 1, shape = [], jit = new Float32Array(N), last = 0, colors = null, colorsAt = 0;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  function reshape(key) {
+    seed = [...String(key || "x")].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) % 2147483647, 7) || 7;
+    // a "song" envelope: a few loud bursts over a quieter body
+    const peaks = Array.from({ length: 4 }, () => [rnd() * N, 2 + rnd() * 6, 0.75 + rnd() * 0.25]);
+    shape = Array.from({ length: N }, (_, i) => {
+      let v = 0.3 + rnd() * 0.3;
+      for (const [p, w, h] of peaks) v = Math.max(v, h * Math.exp(-((i - p) ** 2) / (2 * w * w)) * (0.7 + rnd() * 0.3));
+      return v;
+    });
+  }
+  function palette() {
+    const now = performance.now();
+    if (!colors || now - colorsAt > 1000) {
+      const cs = getComputedStyle(document.documentElement);
+      colors = ["--gold-deep", "--gold", "--shine"].map((v) => cs.getPropertyValue(v).trim());
+      colorsAt = now;
+    }
+    return colors;
+  }
+  function frame(now) {
+    raf = 0;
+    const w = c.clientWidth, h = c.clientHeight;
+    if (!w || $("#player").hidden || document.hidden) return; // nothing to draw: wake() restarts
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (c.width !== Math.round(w * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const playing = !audio.paused;
+    amp += ((playing ? 1 : 0.18) - amp) * 0.08;
+    if (now - last > 90 && playing) { // new "beat" values, smoothed below
+      last = now;
+      for (let i = 0; i < N; i++) jit[i] = 0.55 + Math.random() * 0.45;
+    }
+    const [deep, gold, shine] = palette();
+    const grad = g.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, deep); grad.addColorStop(0.3, gold); grad.addColorStop(0.5, shine); grad.addColorStop(0.7, gold); grad.addColorStop(1, deep);
+    const progress = audio.duration ? audio.currentTime / audio.duration : 0;
+    const step = w / N, bw = Math.max(2, step * 0.55), mid = h / 2;
+    g.fillStyle = grad;
+    g.shadowColor = gold;
+    for (let i = 0; i < N; i++) {
+      const pulse = 0.85 + 0.15 * Math.sin(now / 240 + i * 0.45);
+      shape.cur ??= new Float32Array(N);
+      shape.cur[i] += ((shape[i] || 0.3) * (playing ? jit[i] * pulse : 1) * amp - shape.cur[i]) * 0.25;
+      const bh = Math.max(2, shape.cur[i] * (h - 4));
+      g.globalAlpha = i / N <= progress ? 1 : 0.35;
+      g.shadowBlur = i / N <= progress ? 8 : 0;
+      g.beginPath();
+      (g.roundRect || g.rect).call(g, i * step + (step - bw) / 2, mid - bh / 2, bw, bh, bw / 2);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+    g.shadowBlur = 0;
+    // keep animating while playing or until the bars settle
+    if (playing || Math.abs(amp - 0.18) > 0.01) raf = requestAnimationFrame(frame);
+  }
+  const wake = () => { if (!raf) raf = requestAnimationFrame(frame); };
+  c.addEventListener("click", (e) => {
+    const r = c.getBoundingClientRect();
+    if (audio.duration) audio.currentTime = ((e.clientX - r.left) / r.width) * audio.duration;
+    wake();
+  });
+  audio.addEventListener("timeupdate", () => audio.paused && wake());
+  document.addEventListener("visibilitychange", wake);
+  window.addEventListener("resize", wake);
+  reshape("x");
+  return { wake, track: (t) => { reshape(t?.id ?? t?.key ?? t?.title); shape.cur = null; wake(); } };
+})();
+
 function setPlaying(on) {
   for (const b of [$("#p-play i"), $("#mini-play i")]) setIcon(b, on ? "pause" : "play");
-  $("#eqbars").classList.toggle("on", on);
+  viz.wake();
 }
 audio.addEventListener("play", () => setPlaying(true));
 audio.addEventListener("pause", () => setPlaying(false));
@@ -514,6 +592,7 @@ if ("mediaSession" in navigator) {
 
 function openPlayer() {
   $("#player").hidden = false;
+  viz.wake();
   document.body.classList.add("player-open");
   tg?.BackButton?.show();
   paintAll();
@@ -807,7 +886,7 @@ async function shazamBlob(blob, deliver = false) {
 let engines = null;
 const getEngines = () => (engines ??= call("engines").catch(() => ({ fingerprint: false, humming: false })));
 
-/** Status line under the orb: kind = busy | ok | (plain) */
+/** Status line under the microphone: kind = busy | ok | (plain) */
 function listenStatus(text, kind = "") {
   const el = $("#listen-status");
   el.innerHTML = (kind === "busy" ? '<span class="spinner"></span>' : kind === "ok" ? icon("check") : "") + `<span>${esc(text)}</span>`;
@@ -885,6 +964,57 @@ async function recognizeBlob(blob, spoken = "") {
   }
 }
 
+/* ---------------- neon mic with a spectrum on both sides ---------------- */
+const MIC_BARS = [0.35, 0.7, 0.45, 0.9, 0.55, 1, 0.6, 0.8, 0.4];
+function micArt(id) {
+  const bar = (x, h, i) => `<rect class="b" style="--d:${(-i * 0.17).toFixed(2)}s" x="${x - 2.5}" y="${60 - h / 2}" width="5" height="${h}" rx="2.5"/>`;
+  const left = MIC_BARS.map((h, i) => bar(20 + i * 8.2, 12 + h * 70, i)).join("");
+  const right = [...MIC_BARS].reverse().map((h, i) => bar(155 + i * 8.2, 12 + h * 70, i + 9)).join("");
+  return `<svg viewBox="0 0 240 120" fill="none" stroke="url(#${id})" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="240" y2="0" spreadMethod="reflect">
+      <stop offset="0" style="stop-color:var(--gold-deep)"/><stop offset=".5" style="stop-color:var(--gold)"/><stop offset="1" style="stop-color:var(--shine)"/>
+      <animateTransform attributeName="gradientTransform" type="translate" from="-240 0" to="240 0" dur="4s" repeatCount="indefinite"/>
+    </linearGradient></defs>
+    <g class="bars">${left}${right}</g>
+    <rect x="101" y="12" width="38" height="62" rx="19"/>
+    <path d="M89 52v6a31 31 0 0 0 62 0v-6M120 89v15M106 104h28"/>
+    <path d="M115 57V35l13-3v21"/><circle cx="111.5" cy="57.5" r="3.6"/><circle cx="124.5" cy="53.5" r="3.6"/>
+  </svg>`;
+}
+$$(".mic-art .art").forEach((el, i) => (el.innerHTML = micArt(`mic-g${i}`)));
+
+// while recording, the bars follow the microphone
+function micLevels(stream) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const an = ctx.createAnalyser();
+    an.fftSize = 64;
+    ctx.createMediaStreamSource(stream).connect(an);
+    const data = new Uint8Array(an.frequencyBinCount);
+    const bars = $$("#listen-btn .b");
+    const art = $("#listen-btn");
+    art.classList.add("live");
+    let on = true;
+    (function loop() {
+      if (!on) return;
+      an.getByteFrequencyData(data);
+      bars.forEach((b, i) => {
+        const k = i < 9 ? 8 - i : i - 9; // low frequencies next to the mic
+        b.style.transform = `scaleY(${(0.25 + (data[k + 1] / 255) * 0.95).toFixed(3)})`;
+      });
+      requestAnimationFrame(loop);
+    })();
+    return () => {
+      on = false;
+      art.classList.remove("live");
+      bars.forEach((b) => (b.style.transform = ""));
+      ctx.close().catch(() => {});
+    };
+  } catch {
+    return () => {};
+  }
+}
+
 let recorder = null;
 $("#listen-btn").onclick = async () => {
   if (recorder?.state === "recording") return recorder.stop();
@@ -913,6 +1043,7 @@ $("#listen-btn").onclick = async () => {
     } catch { sr = null; }
   }
   const chunks = [];
+  const stopLevels = micLevels(stream);
   recorder = new MediaRecorder(stream);
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   let left = sing ? 15 : 12;
@@ -922,6 +1053,7 @@ $("#listen-btn").onclick = async () => {
     if (left <= 0 && recorder.state === "recording") recorder.stop();
   }, 1000);
   recorder.onstop = () => {
+    stopLevels();
     stream.getTracks().forEach((t) => t.stop());
     clearInterval(timer);
     try { sr?.stop(); } catch {}

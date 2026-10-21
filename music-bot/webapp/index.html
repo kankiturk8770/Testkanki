@@ -16,6 +16,7 @@
 <body>
 <div class="sky" aria-hidden="true"></div>
 
+<div id="page">
 <header class="top">
   <div class="brand"><img src="logo.svg" class="logo-img" alt=""><b>KANKI</b><i>MUSIC</i></div>
   <div class="top-actions">
@@ -44,10 +45,7 @@
   <!-- listen -->
   <section class="view" id="v-listen">
     <div class="listen-wrap">
-      <button id="listen-btn" class="orb">
-        <span class="halo"></span><span class="halo h2"></span>
-        <span class="orb-core"><i data-i="mic" class="xl"></i><span id="listen-label">گوش بده</span></span>
-      </button>
+      <button id="listen-btn" class="mic-art"><span class="art"></span><span id="listen-label">گوش بده</span></button>
       <p id="listen-status" class="status muted">بزن و گوشی رو نزدیک صدای آهنگ بگیر</p>
       <div class="seg" id="listen-mode">
         <button class="on" data-mode="song">آهنگ پخش میشه</button>
@@ -98,10 +96,11 @@
     <div id="hist-list" class="list"></div>
   </section>
 </main>
+</div>
 
 <!-- "find the song of what I sent in the chat" -->
 <div id="rec-screen" class="rec-screen" hidden>
-  <div class="orb busy"><span class="halo"></span><span class="halo h2"></span><span class="orb-core"><i data-i="mic" class="xl"></i></span></div>
+  <div class="mic-art rec"><span class="art"></span></div>
   <h3 id="rec-title">دارم پیدا می‌کنم…</h3>
   <p id="rec-sub" class="muted"></p>
   <div class="row gap" id="rec-actions" hidden>
@@ -144,10 +143,10 @@
 
   <div class="p-meta">
     <div class="p-text"><h3 id="p-title"></h3><p id="p-artist" class="muted"></p></div>
-    <div class="eqbars" id="eqbars"><i></i><i></i><i></i><i></i></div>
     <button class="icon-btn big" id="p-like"><i data-i="heart"></i></button>
   </div>
 
+  <canvas id="viz" class="viz" aria-hidden="true"></canvas>
   <div class="seek">
     <input type="range" id="seek" min="0" max="1000" value="0">
     <div class="times"><span id="t-cur">0:00</span><span id="t-dur">0:00</span></div>

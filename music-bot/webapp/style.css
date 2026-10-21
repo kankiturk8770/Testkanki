@@ -33,7 +33,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
 html, body { margin: 0; color: var(--text); background: var(--bg-top); font: 14px/1.55 Vazirmatn, Tahoma, sans-serif; }
-body { min-height: 100vh; padding-bottom: 150px; overscroll-behavior: none;
+body { height: 100%; overflow: hidden; overscroll-behavior: none;
   background: radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--gold) 16%, transparent), transparent 60%),
               linear-gradient(var(--bg-top), var(--bg-mid) 50%, var(--bg-top)); background-attachment: fixed; }
 button, input, select { font: inherit; color: inherit; }
@@ -136,18 +136,9 @@ select.pill option { background: var(--panel); }
 .card.smart { grid-column: 1 / -1; min-height: 100px; }
 .card.smart b { color: var(--gold); text-shadow: 0 0 10px color-mix(in srgb, var(--gold) 60%, transparent); }
 
-/* listen: glowing orb with two rings of stars going round */
+/* listen: neon microphone with a spectrum on both sides */
 .listen-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px 0 8px; text-align: center; }
-.orb { position: relative; width: 170px; height: 170px; border: 0; background: none; border-radius: 50%; }
-.orb-core { position: absolute; inset: 18px; border-radius: 50%; display: grid; place-items: center; color: var(--on-gold); font-weight: 800;
-  background: radial-gradient(circle at 35% 30%, var(--shine), var(--gold) 45%, var(--gold-deep));
-  box-shadow: 0 0 40px color-mix(in srgb, var(--gold) 55%, transparent), inset 0 -8px 20px rgba(0,0,0,.25); }
-.halo { position: absolute; inset: 0; border-radius: 50%; border: 1px dashed color-mix(in srgb, var(--gold) 55%, transparent); animation: spin 14s linear infinite; }
-.halo.h2 { inset: 8px; border-style: dotted; animation-direction: reverse; animation-duration: 9s; }
-.orb.rec .halo { animation-duration: 2.5s; border-color: var(--gold-light); box-shadow: 0 0 22px var(--gold); }
-.orb.rec .orb-core { animation: pulse 1.1s ease-in-out infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@keyframes pulse { 50% { transform: scale(.95); box-shadow: 0 0 60px var(--gold); } }
 .link-btn { color: var(--gold-light); cursor: pointer; font-size: .9rem; }
 .match { display: flex; gap: 12px; align-items: center; padding: 12px; margin-bottom: 10px; }
 .match img { width: 76px; height: 76px; border-radius: 12px; object-fit: cover; }
@@ -233,16 +224,8 @@ i[data-i].xl { width: 2.2em; height: 2.2em; }
 .tabs button.on i[data-i] { filter: drop-shadow(0 0 6px var(--gold)); }
 .searchbar > i[data-i] { align-self: center; margin-inline-start: 8px; }
 .gold-btn i[data-i], .pill i[data-i] { width: 16px; height: 16px; }
-.orb-core { flex-direction: column; gap: 4px; }
 .mode-tag { position: absolute; font-size: .55rem; font-weight: 800; }
 
-/* "now playing" bars next to the title */
-.eqbars { display: flex; align-items: flex-end; gap: 3px; height: 18px; margin-inline-start: auto; opacity: 0; transition: opacity .3s; }
-.eqbars i { width: 3px; height: 30%; border-radius: 2px; background: var(--gold); box-shadow: 0 0 6px var(--gold); }
-.eqbars.on { opacity: 1; }
-.eqbars.on i { animation: bar .9s ease-in-out infinite; }
-.eqbars.on i:nth-child(2) { animation-delay: -.3s; } .eqbars.on i:nth-child(3) { animation-delay: -.6s; } .eqbars.on i:nth-child(4) { animation-delay: -.15s; }
-@keyframes bar { 50% { height: 100%; } }
 .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid color-mix(in srgb, var(--gold) 25%, transparent); border-top-color: var(--gold); animation: spin .9s linear infinite; }
 
 /* library: mosaic covers */
@@ -268,8 +251,6 @@ i[data-i].xl { width: 2.2em; height: 2.2em; }
 .rec-screen { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center;
   background: radial-gradient(80% 50% at 50% 40%, color-mix(in srgb, var(--gold) 16%, transparent), transparent 70%), var(--bg-top); }
 .rec-screen h3 { margin: 10px 0 0; color: var(--gold-light); }
-.orb.busy .halo { animation-duration: 2.5s; border-color: var(--gold-light); box-shadow: 0 0 22px var(--gold); }
-.orb.busy .orb-core { animation: pulse 1.1s ease-in-out infinite; }
 .match .send-btn { margin-top: 6px; }
 .mosaic .ph svg { width: 42%; height: 42%; }
 #lib-actions { display: inline-flex; gap: 6px; }
@@ -289,13 +270,11 @@ button svg, label svg { width: 18px; height: 18px; flex: none; }
 .center { text-align: center; }
 
 /* the nav stays visible under the player */
-.sheet { bottom: calc(70px + env(safe-area-inset-bottom)); padding-bottom: 16px; }
+.sheet { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
+body.player-open #page { visibility: hidden; }
 .tabs { z-index: 12; }
 body.player-open .mini { display: none; }
 
-/* listen: centred icon + word in the orb */
-.orb-core { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
-.orb-core i[data-i].xl { width: 42px; height: 42px; }
 #listen-label { font-size: .95rem; font-weight: 800; }
 .status { display: inline-flex; align-items: center; gap: 8px; min-height: 26px; }
 .status svg { width: 22px; height: 22px; color: var(--ok); filter: drop-shadow(0 0 6px var(--ok)); }
@@ -323,9 +302,27 @@ body.player-open .mini { display: none; }
 .cut-row input { flex: 1; }
 
 /* nothing may be wider than the screen: a long link once pushed the whole app sideways */
-html, body { max-width: 100%; overflow-x: hidden; }
+html, body { max-width: 100%; height: 100%; overflow: hidden; }
+/* the page scrolls inside its own box, so Telegram's swipe gestures can't freeze it */
+#page { position: fixed; inset: 0; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain; touch-action: pan-y; padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
 .view, .list, .item, .qline, .match, .card, .tile { min-width: 0; max-width: 100%; }
 .qline { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .top-actions { display: flex; align-items: center; gap: 6px; }
 .bot-pill { padding: 5px 11px; font-size: .78rem; color: var(--gold-light); }
 .logo-img { width: 34px; height: 34px; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--gold) 50%, transparent)); }
+
+.mic-art { display: flex; flex-direction: column; align-items: center; gap: 2px; border: 0; background: none; padding: 6px 10px; color: var(--gold-light); }
+.mic-art .art { display: block; width: min(78vw, 300px); aspect-ratio: 2; }
+.mic-art svg { width: 100%; height: 100%; overflow: visible;
+  filter: drop-shadow(0 0 3px var(--gold)) drop-shadow(0 0 12px color-mix(in srgb, var(--gold) 55%, transparent)); }
+.mic-art .b { transform-box: fill-box; transform-origin: center; animation: mic-bar 2.4s ease-in-out infinite var(--d); transition: transform .08s; }
+.mic-art.rec .b { animation-duration: .7s; }
+.mic-art.live .b { animation: none; }
+.mic-art:active svg { transform: scale(.97); }
+@keyframes mic-bar { 0%, 100% { transform: scaleY(.55); } 50% { transform: scaleY(1); } }
+#listen-label { font-size: 1rem; font-weight: 800; letter-spacing: .02em; text-shadow: 0 0 10px var(--gold); }
+.rec-screen .mic-art .art { width: min(70vw, 260px); }
+
+/* player spectrum (tap = seek) */
+.viz { display: block; width: 100%; height: 64px; margin: 10px 0 0; cursor: pointer; }
