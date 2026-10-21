@@ -12,10 +12,13 @@ import { getSetting, setSetting } from './store.js';
 import { concatBytes, readBytes, fromBase64 } from './util.js';
 import { muxAV } from './mp4mux.js';
 import { desDecrypt } from './des.js';
+import { deezerSearch, itunesSearch, geniusLyrics } from './catalog.js';
 
 export const AUDIO_QUALITIES = ['128', '192', '320'];
 /** Sources the bot can search and download itself; anything else is a pasted link. */
-export const MUSIC_SOURCES = ['youtube', 'soundcloud', 'radiojavan', 'saavn'];
+export const MUSIC_SOURCES = ['youtube', 'soundcloud', 'radiojavan', 'saavn', 'deezer', 'itunes', 'genius'];
+/** Catalogue results: known songs without a file of their own. */
+const CATALOG = ['deezer', 'itunes', 'genius'];
 export const VIDEO_QUALITIES = ['360', '480', '720', '1080'];
 const MAX_DURATION = 20 * 60;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
@@ -366,16 +369,50 @@ async function cobalt(url, opts) {
 
 const safeList = (name, p) => p.catch((e) => (console.warn(`${name} search`, e.message), []));
 
+// Every search asks all engines at once and merges what they say about each song.
+const ENGINES = [
+  ['youtube', ytSearch], ['radiojavan', rjSearch], ['soundcloud', scSearch], ['saavn', saavnSearch],
+  ['deezer', deezerSearch], ['itunes', itunesSearch],
+];
+// which copy of a song to show (and download) when several engines found it
+const PREFER = ['radiojavan', 'saavn', 'soundcloud', 'youtube', 'deezer', 'itunes', 'genius'];
+const songId = (t) => `${[...words(cleanTitle(t.title))].join(' ')}|${[...words(t.artist || '')][0] || ''}`;
+
 export async function search(query, limit = 12) {
-  const per = Math.ceil(limit / 3) + 2;
-  const [yt, rj, sc] = await Promise.all([
-    safeList('yt', ytSearch(query, per)), safeList('rj', rjSearch(query, per)), safeList('sc', scSearch(query, per)),
+  const lyricLike = query.trim().split(/\s+/).length >= 5; // a line of a song
+  const persian = /[\u0600-\u06FF]/.test(query);
+  const wantsVersion = /karaoke|instrumental|کارائوکه|بی ?کلام/i.test(query);
+  const lists = await Promise.all([
+    ...ENGINES.map(([name, fn]) => safeList(name, fn(query, 5))),
+    lyricLike ? safeList('genius', geniusLyrics(query, 4)) : [],
   ]);
-  const out = [];
-  for (let i = 0; i < Math.max(yt.length, rj.length, sc.length); i++) {
-    for (const list of [rj, yt, sc]) if (list[i]) out.push(list[i]);
+  const groups = new Map();
+  for (const list of lists) {
+    list.forEach((t, rank) => {
+      const id = songId(t);
+      let g = groups.get(id);
+      if (!g) groups.set(id, (g = { items: [], engines: new Set(), rank: Infinity }));
+      g.items.push(t);
+      g.engines.add(t.source);
+      g.rank = Math.min(g.rank, rank);
+    });
   }
-  return out.slice(0, limit);
+  const scored = [...groups.values()].map((g) => {
+    const rep = { ...g.items.sort((a, b) => PREFER.indexOf(a.source) - PREFER.indexOf(b.source))[0] };
+    // catalogues have the nicest covers and exact lengths
+    const cat = g.items.find((t) => (t.source === 'deezer' || t.source === 'itunes') && t.thumb);
+    if (cat && rep.source === 'youtube') rep.thumb = cat.thumb;
+    rep.duration ||= g.items.find((t) => t.duration)?.duration || null;
+    const score = similarity(query, `${rep.artist || ''} ${rep.title}`) * 3
+      + (g.engines.size - 1) * 0.8 // engines agree on it
+      - g.rank * 0.25
+      + (g.engines.has('genius') ? 3 : 0) // the text is in its lyrics
+      // RadioJavan understands Persian script itself (and has full files): trust its top hits
+      + (persian && g.engines.has('radiojavan') ? 3.5 - g.rank * 0.5 : 0)
+      - (!wantsVersion && /karaoke|instrumental|کارائوکه|بی کلام/i.test(rep.title) ? 3 : 0);
+    return { rep, score };
+  });
+  return scored.sort((a, b) => b.score - a.score).map((x) => x.rep).slice(0, limit);
 }
 
 export async function remixes(track, limit = 12) {
@@ -432,6 +469,7 @@ export async function alternatives(track) {
 }
 
 async function audioFrom(track, kbps) {
+  if (CATALOG.includes(track.source)) throw new Error('catalogue entry'); // the stand-ins below find the file
   if (track.source === 'soundcloud') return scAudio(track);
   if (track.source === 'radiojavan') return rjAudio(track);
   if (track.source === 'saavn') return saavnAudio(track, kbps);
@@ -460,7 +498,7 @@ export async function downloadAudio(track, kbps = '192') {
       }
     }
   }
-  throw new Error(track.source === 'youtube'
+  throw new Error(track.source === 'youtube' || CATALOG.includes(track.source)
     ? 'این آهنگ فقط تو یوتیوب هست و یوتیوب دانلود از سرور رو بسته؛ یه نسخه‌ی دیگه از نتایج رو امتحان کن'
     : String(first?.message || first));
 }

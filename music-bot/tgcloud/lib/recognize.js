@@ -9,6 +9,7 @@
 import { fetch, FormData, InputFile } from 'sdk';
 import { getSetting } from './store.js';
 import { hmacSha1Base64, now } from './util.js';
+import { geniusLyrics } from './catalog.js';
 
 const ACR_MAX = 5 * 1024 * 1024;
 
@@ -66,7 +67,7 @@ export async function transcribe(sample) {
 
 export async function lyricsSearch(text, limit = 5) {
   const token = await getSetting('genius_token');
-  if (!token) return [];
+  if (!token) return (await geniusLyrics(text, limit).catch(() => [])).map((t) => ({ title: t.title, artist: t.artist }));
   const res = await fetch(`https://api.genius.com/search?q=${encodeURIComponent(text)}`, { headers: { Authorization: `Bearer ${token}` } });
   const hits = (await res.json())?.response?.hits || [];
   return hits.slice(0, limit).map((h) => ({ title: h.result?.title, artist: h.result?.primary_artist?.name }));
