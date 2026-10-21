@@ -2,7 +2,7 @@
 import { api } from 'sdk';
 import * as store from '../lib/store.js';
 import { send, doSearch, openLink, runRecognition, sendRemixes } from '../lib/actions.js';
-import { WELCOME, ADMIN_HELP, appButton, audioQualityKeyboard, videoQualityKeyboard, trackName } from '../lib/ui.js';
+import { WELCOME, ADMIN_HELP, appButton, webappUrl, audioQualityKeyboard, videoQualityKeyboard, trackName } from '../lib/ui.js';
 import { esc, parseRange } from '../lib/util.js';
 
 const URL_RE = /https?:\/\/\S+/;
@@ -53,6 +53,8 @@ async function command(msg, uid) {
   const arg = rest.join(' ').trim();
   if (cmd === '/start') {
     const app = await appButton('📱 باز کردن مینی‌اپ');
+    // the "🎵 پلیر" button next to the message box opens the Mini App
+    await api.setChatMenuButton({ chat_id: msg.chat.id, menu_button: { type: 'web_app', text: '🎵 پلیر', web_app: { url: await webappUrl() } } }).catch(() => {});
     return send(msg.chat.id, WELCOME(msg.from.first_name), app ? { reply_markup: { inline_keyboard: [[app]] } } : {});
   }
   if (cmd === '/app') {

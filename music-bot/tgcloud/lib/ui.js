@@ -7,9 +7,16 @@ const ICON = { youtube: '▶️', soundcloud: '☁️' };
 
 export const btn = (text, data) => ({ text, callback_data: data });
 
-/** Mini App button, or null until the admin has set the Mini App address (/set webapp_url …). */
+// Address printed by `tgcloud push`; /set webapp_url overrides it.
+export const DEFAULT_WEBAPP_URL = 'https://app8859705249.tgcloud.ai/';
+
+export async function webappUrl() {
+  return (await getSetting('webapp_url')) || DEFAULT_WEBAPP_URL;
+}
+
+/** Mini App button, or null when no Mini App address is known. */
 export async function appButton(text, params = '') {
-  const url = await getSetting('webapp_url');
+  const url = await webappUrl();
   return url ? { text, web_app: { url: url.replace(/\/?$/, '/') + params } } : null;
 }
 
