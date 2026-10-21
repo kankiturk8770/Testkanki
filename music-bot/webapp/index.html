@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Music Player</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js" defer></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -119,15 +120,14 @@
     <button class="icon" id="p-fwd10">10↻</button>
   </div>
   <div class="actions">
-    <button class="btn" data-panel="cut">✂️ برش</button>
-    <button class="btn" data-panel="send">📩 ارسال</button>
-    <button class="btn" data-panel="fx">🎛 افکت</button>
+    <button class="btn" data-panel="edit">✂️ برش و افکت</button>
+    <button class="btn" data-panel="send">📩 ارسال به چت</button>
     <button class="btn" id="p-add">➕ پلی‌لیست</button>
     <button class="btn" id="p-remix">🔁 ریمیکس</button>
   </div>
 
-  <div class="panel" id="panel-cut" hidden>
-    <h4>✂️ برش و رینگتون</h4>
+  <div class="panel" id="panel-edit" hidden>
+    <h4>✂️ ویرایشگر (برش، رینگتون، افکت)</h4>
     <div class="cut-bar" id="cut-bar"><div class="sel" id="cut-sel"></div><div class="head" id="cut-head"></div></div>
     <label>شروع: <b id="cut-a-t">0:00</b>
       <input type="range" id="cut-a" min="0" max="100" step="0.1" value="0"></label>
@@ -135,16 +135,30 @@
     <label>پایان: <b id="cut-b-t">0:30</b>
       <input type="range" id="cut-b" min="0" max="100" step="0.1" value="30"></label>
     <div class="row gap"><button class="btn small ghost" data-nudge="b:-1">-1s</button><button class="btn small ghost" data-mark="b">📍 تا همین لحظه</button><button class="btn small ghost" data-nudge="b:1">+1s</button></div>
-    <p class="muted">طول: <b id="cut-len">30s</b></p>
     <div class="row gap wrap">
-      <button class="btn" id="cut-preview">▶ پیش‌نمایش (تکرار)</button>
-      <label class="toggle"><input type="checkbox" id="cut-fade" checked> فید</label>
-      <select id="cut-fmt"><option value="mp3">mp3 (اندروید)</option><option value="m4r">m4r (رینگتون آیفون)</option><option value="ogg">ویس تلگرام</option></select>
+      <button class="btn small ghost" id="cut-whole">کل آهنگ</button>
+      <button class="btn small ghost" id="cut-ring">🔔 ۳۰ ثانیه رینگتون</button>
+      <span class="muted">طول: <b id="cut-len">30s</b></span>
+    </div>
+    <h4>🎛 افکت</h4>
+    <div class="chips wrap" id="fx-chips">
+      <button class="chip on" data-fx="">بدون افکت</button>
+      <button class="chip" data-fx="slow">🐢 اسلو + ریورب</button>
+      <button class="chip" data-fx="fast">⚡ تند</button>
+      <button class="chip" data-fx="bass">🔊 باس</button>
+      <button class="chip" data-fx="8d">🎧 8D</button>
+      <button class="chip" data-fx="karaoke">🎤 بی‌کلام</button>
+      <button class="chip" data-fx="loud">📢 بلندتر</button>
+    </div>
+    <div class="row gap wrap">
+      <label class="toggle"><input type="checkbox" id="cut-fade" checked> فید اول و آخر</label>
+      <select id="cut-fmt"><option value="audio">🎵 فایل mp3</option><option value="voice">🎙 ویس تلگرام</option></select>
     </div>
     <div class="row gap">
-      <button class="btn primary" id="cut-download">⬇️ دانلود</button>
-      <button class="btn primary" id="cut-chat">📩 بفرست تو چت</button>
+      <button class="btn" id="cut-preview">▶ گوش دادن زنده</button>
+      <button class="btn primary" id="cut-send">📩 بساز و بفرست تو چت</button>
     </div>
+    <p class="muted small-note" id="edit-status">پردازش روی گوشی خودت انجام میشه و نتیجه تو چت ربات میاد.</p>
   </div>
 
   <div class="panel" id="panel-send" hidden>
@@ -153,18 +167,6 @@
     <h4>🎬 ویدیو</h4>
     <div class="row gap wrap" id="send-video"></div>
     <div class="row gap"><button class="btn ghost" data-send="voice:">🎙 به صورت ویس</button></div>
-  </div>
-
-  <div class="panel" id="panel-fx" hidden>
-    <h4>🎛 نسخه‌ی ویرایش‌شده رو تو چت بگیر</h4>
-    <div class="row gap wrap">
-      <button class="btn" data-send="slow:">🐢 اسلو + ریورب</button>
-      <button class="btn" data-send="fast:">⚡ تند</button>
-      <button class="btn" data-send="bass:">🔊 باس بوست</button>
-      <button class="btn" data-send="8d:">🎧 8D</button>
-      <button class="btn" data-send="karaoke:">🎤 بی‌کلام (کارائوکه)</button>
-      <button class="btn" data-send="loud:">📢 بلندتر</button>
-    </div>
   </div>
 
   <div class="panel" id="panel-queue" hidden>

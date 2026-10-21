@@ -109,3 +109,5 @@ h3, h4 { margin: .2rem 0; }
 .cut-bar .sel { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 40%, transparent); border-inline: 3px solid var(--accent); }
 .cut-bar .head { position: absolute; top: 0; bottom: 0; width: 2px; background: #e33; }
 .toast { position: fixed; bottom: 130px; left: 50%; transform: translateX(-50%); background: #000d; color: #fff; padding: 8px 16px; border-radius: 10px; z-index: 20; max-width: 90vw; text-align: center; }
+.chips.wrap { flex-wrap: wrap; }
+.small-note { font-size: .8rem; margin: 6px 0 0; }

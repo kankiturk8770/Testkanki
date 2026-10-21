@@ -1,0 +1,8 @@
+{
+  "$schema": "./node_modules/@tgcloud/cli/schema/tgcloud.json",
+  // The Mini App is plain HTML/JS, no build step: the folder is deployed as is.
+  "static": {
+    "source": "webapp",
+    "headers": [{ "path": "/*", "set": { "Referrer-Policy": "no-referrer" } }]
+  }
+}

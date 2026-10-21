@@ -1,4 +1,7 @@
 "use strict";
+// Mini App: player, library, history, live recognition and an in-browser audio editor.
+// The backend is the bot's Telegram Serverless endpoints (tgcloud/endpoints/*), called
+// with Telegram.WebApp.Serverless.call.
 const tg = window.Telegram?.WebApp;
 tg?.ready();
 tg?.expand();
@@ -24,16 +27,27 @@ function toast(msg, ms = 2500) {
   toast.t = setTimeout(() => (el.hidden = true), ms);
 }
 
-async function api(path, opts = {}) {
-  const headers = { "X-Init-Data": tg?.initData || "", ...(opts.headers || {}) };
-  if (opts.json !== undefined) {
-    headers["Content-Type"] = "application/json";
-    opts.body = JSON.stringify(opts.json);
-  }
-  const r = await fetch(path, { ...opts, headers });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || (r.status === 401 ? "مینی‌اپ رو از داخل ربات باز کن" : `خطا ${r.status}`));
-  return data;
+/** Call a bot endpoint. */
+function call(name, input = {}) {
+  return new Promise((resolve, reject) => {
+    if (!tg?.Serverless) return reject(new Error("مینی‌اپ رو از داخل ربات باز کن"));
+    tg.Serverless.call(name, input, (err, result) => {
+      if (!err) return resolve(result);
+      reject(new Error(err.type === "UNAUTHORIZED" ? "مینی‌اپ رو از داخل ربات باز کن" : err.message || "خطا"));
+    });
+  });
+}
+
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function bytesToB64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
 }
 
 /* ---------------- tabs ---------------- */
@@ -45,7 +59,7 @@ function showView(id) {
 }
 $$(".tabs button").forEach((b) => (b.onclick = () => showView(b.dataset.view)));
 
-/* ---------------- track list rendering ---------------- */
+/* ---------------- track lists ---------------- */
 function renderList(el, tracks, { emptyText = "چیزی نیست", onRemove } = {}) {
   if (!tracks.length) {
     el.innerHTML = `<p class="empty">${esc(emptyText)}</p>`;
@@ -79,7 +93,7 @@ async function doSearch(q) {
   const el = $("#search-results");
   el.innerHTML = '<p class="empty">🔎 در حال جستجو...</p>';
   try {
-    renderList(el, await api(`/api/search?q=${encodeURIComponent(q)}`), { emptyText: "چیزی پیدا نشد 😕" });
+    renderList(el, await call("search", { q }), { emptyText: "چیزی پیدا نشد 😕" });
   } catch (e) {
     el.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
   }
@@ -97,32 +111,69 @@ $$("#search-chips .chip").forEach((c) => (c.onclick = () => {
   doSearch(base + c.dataset.suffix);
 }));
 
+/* ---------------- audio loading ---------------- */
+// Track audio comes from the bot in base64 parts; kept in memory for the session.
+const audioCache = new Map(); // id -> Promise<{ blob, url }>
+function loadAudio(t, onProgress) {
+  if (!audioCache.has(t.id)) {
+    const p = (async () => {
+      const first = await call("audioChunk", { id: t.id, idx: 0 });
+      const parts = [b64ToBytes(first.data)];
+      onProgress?.(1, first.total);
+      for (let i = 1; i < first.total; i++) {
+        parts.push(b64ToBytes((await call("audioChunk", { id: t.id, idx: i })).data));
+        onProgress?.(i + 1, first.total);
+      }
+      const blob = new Blob(parts, { type: first.mime });
+      return { blob, url: URL.createObjectURL(blob) };
+    })();
+    p.catch(() => audioCache.delete(t.id));
+    audioCache.set(t.id, p);
+  }
+  return audioCache.get(t.id);
+}
+
 /* ---------------- player ---------------- */
 const audio = $("#audio");
 const player = {
   queue: [], idx: -1, cur: null,
   repeat: "off", // off | all | one
   shuffle: false,
-  loop: null, // [a, b] while previewing a cut
+  loadSeq: 0,
 
   playList(tracks, i) {
     this.queue = tracks.slice();
     this.load(i, true);
     openPlayer();
   },
-  load(i, autoplay) {
+  async load(i, autoplay) {
     if (i < 0 || i >= this.queue.length) return;
     this.idx = i;
     this.cur = this.queue[i];
-    this.loop = null;
     const t = this.cur;
-    $("#p-loading").hidden = false;
-    audio.src = t.stream;
-    audio.playbackRate = +$("#p-rate").value;
-    if (autoplay) audio.play().catch(() => {});
-    api(`/api/play/${t.id}`, { method: "POST" }).catch(() => {});
+    const seq = ++this.loadSeq;
+    stopPreview();
+    audio.pause();
     this.render();
     setupCut();
+    const loading = $("#p-loading");
+    loading.hidden = false;
+    loading.textContent = "⏳ در حال آماده‌سازی...";
+    try {
+      const { url } = await loadAudio(t, (n, total) => {
+        if (seq === this.loadSeq) loading.textContent = `⏳ دریافت ${n} از ${total}`;
+      });
+      if (seq !== this.loadSeq) return;
+      audio.src = url;
+      audio.playbackRate = +$("#p-rate").value;
+      if (autoplay) audio.play().catch(() => {});
+      call("played", { id: t.id }).catch(() => {});
+      preloadNext();
+    } catch (e) {
+      if (seq !== this.loadSeq) return;
+      loading.hidden = true;
+      toast("⚠️ " + e.message, 4000);
+    }
   },
   render() {
     const t = this.cur;
@@ -136,7 +187,6 @@ const player = {
     $("#p-shuffle").classList.toggle("active", this.shuffle);
     $("#p-repeat").classList.toggle("active", this.repeat !== "off");
     $("#p-repeat").textContent = this.repeat === "one" ? "🔂" : "🔁";
-    $$(".item").forEach((el) => el.classList.remove("playing"));
     if ("mediaSession" in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: t.title, artist: t.artist || "", artwork: t.thumb ? [{ src: t.thumb, sizes: "480x360" }] : [],
@@ -167,32 +217,31 @@ const player = {
     else this.load(this.nextIndex(-1), true);
   },
   toggle() {
-    if (!this.cur) return;
+    if (!this.cur || !audio.src) return;
     audio.paused ? audio.play() : audio.pause();
   },
 };
 
+// fetch the next track in the background so skipping is instant
+function preloadNext() {
+  if (player.shuffle) return;
+  const t = player.queue[player.idx + 1];
+  if (t) loadAudio(t).catch(() => {});
+}
+
 audio.addEventListener("play", () => ($("#p-play").textContent = $("#mini-play").textContent = "⏸"));
 audio.addEventListener("pause", () => ($("#p-play").textContent = $("#mini-play").textContent = "▶"));
 audio.addEventListener("canplay", () => ($("#p-loading").hidden = true));
-audio.addEventListener("waiting", () => ($("#p-loading").hidden = false));
-audio.addEventListener("playing", () => ($("#p-loading").hidden = true));
-audio.addEventListener("error", () => {
-  $("#p-loading").hidden = true;
-  if (player.cur) toast("پخش این آهنگ ممکن نشد؛ بعدی...");
-  setTimeout(() => player.next(false), 1200);
-});
 audio.addEventListener("loadedmetadata", () => {
   $("#t-dur").textContent = fmt(audio.duration);
   setupCut();
 });
 audio.addEventListener("timeupdate", () => {
   const d = audio.duration || 0, c = audio.currentTime;
-  if (player.loop && c >= player.loop[1]) audio.currentTime = player.loop[0];
   if (!seeking) $("#seek").value = d ? (c / d) * 1000 : 0;
   $("#t-cur").textContent = fmt(c);
   $("#mini-bar").style.width = d ? `${(c / d) * 100}%` : "0";
-  if (d) $("#cut-head").style.left = `${(c / d) * 100}%`;
+  if (d && !preview) $("#cut-head").style.left = `${(c / d) * 100}%`;
 });
 audio.addEventListener("ended", () => {
   if (player.repeat === "one") {
@@ -237,7 +286,8 @@ $("#p-repeat").onclick = () => {
 $("#p-like").onclick = async () => {
   const t = player.cur;
   if (!t) return;
-  const r = await api(`/api/like/${t.id}`, { method: "POST" });
+  const r = await call("like", { id: t.id }).catch((e) => toast(e.message));
+  if (!r) return;
   t.liked = r.liked;
   haptic("medium");
   player.render();
@@ -291,7 +341,7 @@ function togglePanel(name, force) {
     p.hidden = !show;
   });
   if (name === "queue") renderQueue();
-  if (name === "cut") setupCut();
+  if (name === "edit") setupCut();
   if (!$(`#panel-${name}`).hidden) setTimeout(() => $(`#panel-${name}`).scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
 }
 $$("[data-panel]").forEach((b) => (b.onclick = () => togglePanel(b.dataset.panel)));
@@ -299,7 +349,6 @@ $("#player-queue-btn").onclick = () => togglePanel("queue");
 
 function renderQueue() {
   renderList($("#queue-list"), player.queue);
-  // clicking a queue item keeps the queue, just jumps
   [...$("#queue-list").children].forEach((row, i) => (row.onclick = () => player.load(i, true)));
 }
 
@@ -313,7 +362,7 @@ document.addEventListener("click", async (e) => {
   b.disabled = true;
   toast("⏳ دارم آماده می‌کنم؛ تو چت ربات می‌فرستم...", 4000);
   try {
-    await api("/api/send", { method: "POST", json: { track_id: player.cur.id, kind, quality } });
+    await call("sendTrack", { id: player.cur.id, kind, quality });
     toast("✅ تو چت ربات فرستادم");
     haptic("medium");
   } catch (err) {
@@ -325,48 +374,54 @@ document.addEventListener("click", async (e) => {
 
 /* add to playlist */
 $("#p-add").onclick = async () => {
-  if (!player.cur) return;
-  const lib = await api("/api/library");
-  const buttons = lib.playlists.slice(0, 4).map((p) => ({ id: String(p.id), type: "default", text: p.name }));
-  buttons.push({ id: "new", type: "default", text: "➕ پلی‌لیست جدید" });
+  const t = player.cur;
+  if (!t) return;
+  const lib = await call("library").catch((e) => (toast(e.message), null));
+  if (!lib) return;
   const add = async (id) => {
     if (!id) return;
     if (id === "new") {
       const name = prompt("اسم پلی‌لیست:");
       if (!name) return;
-      await api("/api/playlists", { method: "POST", json: { name, track_id: player.cur.id } });
-    } else await api(`/api/playlists/${id}/tracks/${player.cur.id}`, { method: "POST" });
+      await call("playlist", { op: "create", name, trackId: t.id });
+    } else await call("playlist", { op: "add", id: Number(id), trackId: t.id });
     toast("✅ اضافه شد");
   };
-  if (tg?.showPopup && buttons.length <= 3) tg.showPopup({ title: "افزودن به پلی‌لیست", message: player.cur.title.slice(0, 60), buttons }, add);
+  const buttons = lib.playlists.slice(0, 2).map((p) => ({ id: String(p.id), type: "default", text: p.name.slice(0, 30) }));
+  buttons.push({ id: "new", type: "default", text: "➕ پلی‌لیست جدید" });
+  if (tg?.showPopup && lib.playlists.length <= 2) {
+    tg.showPopup({ title: "افزودن به پلی‌لیست", message: t.title.slice(0, 60), buttons }, (id) => add(id).catch((e) => toast(e.message)));
+    return;
+  }
+  const names = lib.playlists.map((p, i) => `${i + 1}. ${p.name}`).join("\n");
+  const pick = prompt(`شماره پلی‌لیست، یا اسم یه پلی‌لیست جدید:\n${names}`);
+  if (!pick) return;
+  const p = lib.playlists[+pick - 1];
+  if (p) await add(String(p.id)).catch((e) => toast(e.message));
   else {
-    const names = lib.playlists.map((p, i) => `${i + 1}. ${p.name}`).join("\n");
-    const pick = prompt(`شماره پلی‌لیست یا اسم پلی‌لیست جدید:\n${names}`);
-    if (!pick) return;
-    const p = lib.playlists[+pick - 1];
-    if (p) add(String(p.id));
-    else {
-      await api("/api/playlists", { method: "POST", json: { name: pick, track_id: player.cur.id } });
-      toast("✅ پلی‌لیست ساخته شد");
-    }
+    await call("playlist", { op: "create", name: pick, trackId: t.id }).catch((e) => toast(e.message));
+    toast("✅ پلی‌لیست ساخته شد");
   }
 };
 
 $("#p-remix").onclick = async () => {
-  if (!player.cur) return;
+  const t = player.cur;
+  if (!t) return;
   toast("🔁 دنبال ریمیکس‌ها...");
-  const list = await api(`/api/remixes/${player.cur.id}`).catch((e) => (toast(e.message), null));
+  const list = await call("remixes", { id: t.id }).catch((e) => (toast(e.message), null));
   if (!list?.length) return toast("ریمیکسی پیدا نشد");
   closePlayer();
   showView("v-search");
-  $("#q").value = `${player.cur.artist || ""} ${player.cur.title} remix`.trim();
+  $("#q").value = `${t.artist || ""} ${t.title} remix`.trim();
   renderList($("#search-results"), list);
 };
 
-/* ---------------- cutter ---------------- */
-const cut = { a: 0, b: 30 };
+/* ---------------- editor: cut, ringtone, effects (Web Audio, in the browser) ---------------- */
+const cut = { a: 0, b: 30, fx: "", track: null };
+const trackDur = () => audio.duration || player.cur?.duration || 0;
+
 function setupCut() {
-  const d = audio.duration || player.cur?.duration || 0;
+  const d = trackDur();
   if (!d) return;
   ["#cut-a", "#cut-b"].forEach((s) => ($(s).max = d.toFixed(1)));
   if (cut.track !== player.cur?.id) {
@@ -377,7 +432,7 @@ function setupCut() {
   drawCut();
 }
 function drawCut() {
-  const d = audio.duration || player.cur?.duration || 1;
+  const d = trackDur() || 1;
   cut.a = Math.max(0, Math.min(cut.a, d - 1));
   cut.b = Math.max(cut.a + 1, Math.min(cut.b, d));
   $("#cut-a").value = cut.a;
@@ -387,68 +442,224 @@ function drawCut() {
   $("#cut-len").textContent = `${Math.round(cut.b - cut.a)}s`;
   $("#cut-sel").style.left = `${(cut.a / d) * 100}%`;
   $("#cut-sel").style.width = `${((cut.b - cut.a) / d) * 100}%`;
-  if (player.loop) player.loop = [cut.a, cut.b];
 }
+const restartPreview = () => preview && startPreview();
 $("#cut-a").oninput = () => { cut.a = +$("#cut-a").value; drawCut(); };
 $("#cut-b").oninput = () => { cut.b = +$("#cut-b").value; drawCut(); };
-$("#cut-a").onchange = () => { if (player.loop) audio.currentTime = cut.a; };
+$("#cut-a").onchange = $("#cut-b").onchange = restartPreview;
 $$("[data-nudge]").forEach((b) => (b.onclick = () => {
   const [k, v] = b.dataset.nudge.split(":");
   cut[k] += +v;
   drawCut();
-  if (k === "a") audio.currentTime = cut.a;
+  restartPreview();
 }));
 $$("[data-mark]").forEach((b) => (b.onclick = () => {
   cut[b.dataset.mark] = audio.currentTime;
   drawCut();
+  restartPreview();
 }));
-// tap on the bar: move the nearer handle there
+$("#cut-whole").onclick = () => { cut.a = 0; cut.b = trackDur(); drawCut(); restartPreview(); };
+$("#cut-ring").onclick = () => { const d = trackDur(); cut.a = Math.max(0, d * 0.4 - 15); cut.b = Math.min(d, cut.a + 30); drawCut(); restartPreview(); };
 $("#cut-bar").onclick = (e) => {
   const r = e.currentTarget.getBoundingClientRect();
-  const t = ((e.clientX - r.left) / r.width) * (audio.duration || 0);
+  const t = ((e.clientX - r.left) / r.width) * trackDur();
   if (Math.abs(t - cut.a) < Math.abs(t - cut.b)) cut.a = t; else cut.b = t;
   drawCut();
+  restartPreview();
 };
-$("#cut-preview").onclick = () => {
-  if (player.loop) {
-    player.loop = null;
-    $("#cut-preview").textContent = "▶ پیش‌نمایش (تکرار)";
-    return;
-  }
-  player.loop = [cut.a, cut.b];
-  audio.currentTime = cut.a;
-  audio.play();
-  $("#cut-preview").textContent = "⏹ توقف پیش‌نمایش";
-};
-async function doCut(deliver) {
-  if (!player.cur) return;
-  const body = { track_id: player.cur.id, start: cut.a, end: cut.b, fade: $("#cut-fade").checked, fmt: $("#cut-fmt").value, deliver };
-  toast("✂️ در حال برش...", 4000);
-  try {
-    const r = await api("/api/cut", { method: "POST", json: body });
-    if (deliver === "chat") return toast("✅ تو چت ربات فرستادم");
-    const url = new URL(r.url, location.href).href;
-    if (tg?.downloadFile) tg.downloadFile({ url, file_name: r.name });
-    else if (tg?.openLink) tg.openLink(url);
-    else location.href = url;
-  } catch (e) {
-    toast("⚠️ " + e.message, 4000);
-  }
+$$("#fx-chips .chip").forEach((c) => (c.onclick = () => {
+  cut.fx = c.dataset.fx;
+  $$("#fx-chips .chip").forEach((x) => x.classList.toggle("on", x === c));
+  restartPreview();
+}));
+
+const RATE = { slow: 0.85, fast: 1.2 };
+let decoded = { id: null, buffer: null };
+async function getBuffer() {
+  const t = player.cur;
+  if (decoded.id === t.id) return decoded.buffer;
+  $("#edit-status").textContent = "⏳ آماده‌سازی صدا...";
+  const { blob } = await loadAudio(t);
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+  ctx.close();
+  decoded = { id: t.id, buffer };
+  $("#edit-status").textContent = "";
+  return buffer;
 }
-$("#cut-download").onclick = () => doCut("link");
-$("#cut-chat").onclick = () => doCut("chat");
+
+function impulse(ctx, seconds = 2.5) {
+  const len = Math.floor(ctx.sampleRate * seconds);
+  const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 3;
+  }
+  return buf;
+}
+
+/** The effect chain between a source and ctx.destination; the same graph plays live and renders offline. */
+function buildGraph(ctx, buffer, { a, b, fx, fade }) {
+  const rate = RATE[fx] || 1;
+  const outDur = (b - a) / rate;
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.playbackRate.value = rate;
+  let node = src;
+  const link = (n) => (node.connect(n), (node = n));
+
+  if (fx === "karaoke" && buffer.numberOfChannels > 1) {
+    // left minus right removes what is mixed in the centre: usually the vocals
+    const split = ctx.createChannelSplitter(2), merge = ctx.createChannelMerger(2);
+    const l = ctx.createGain(), r = ctx.createGain();
+    r.gain.value = -1;
+    node.connect(split);
+    split.connect(l, 0);
+    split.connect(r, 1);
+    for (const g of [l, r]) { g.connect(merge, 0, 0); g.connect(merge, 0, 1); }
+    node = merge;
+  }
+  if (fx === "bass") {
+    const f = ctx.createBiquadFilter();
+    f.type = "lowshelf"; f.frequency.value = 110; f.gain.value = 12;
+    link(f);
+    link(ctx.createDynamicsCompressor());
+  }
+  if (fx === "loud") {
+    const g = ctx.createGain();
+    g.gain.value = 1.8;
+    link(g);
+    link(ctx.createDynamicsCompressor());
+  }
+  if (fx === "8d") {
+    const p = ctx.createStereoPanner();
+    const steps = Math.max(2, Math.ceil(outDur * 20));
+    const curve = new Float32Array(steps);
+    for (let i = 0; i < steps; i++) curve[i] = 0.9 * Math.sin((2 * Math.PI * 0.09 * i) / 20);
+    p.pan.setValueCurveAtTime(curve, ctx.currentTime, outDur);
+    link(p);
+  }
+  const out = ctx.createGain();
+  if (fade) {
+    const f = Math.min(2, outDur / 4), t0 = ctx.currentTime;
+    out.gain.setValueAtTime(0, t0);
+    out.gain.linearRampToValueAtTime(1, t0 + f);
+    out.gain.setValueAtTime(1, t0 + outDur - f);
+    out.gain.linearRampToValueAtTime(0, t0 + outDur);
+  }
+  if (fx === "slow") {
+    const wet = ctx.createGain(), conv = ctx.createConvolver();
+    wet.gain.value = 0.35;
+    conv.buffer = impulse(ctx);
+    node.connect(conv);
+    conv.connect(wet);
+    wet.connect(out);
+  }
+  node.connect(out);
+  out.connect(ctx.destination);
+  src.start(ctx.currentTime, a, b - a);
+  return { src, outDur };
+}
+
+let preview = null; // { ctx, src }
+function stopPreview() {
+  if (!preview) return;
+  try { preview.src.stop(); } catch {}
+  preview.ctx.close();
+  preview = null;
+  $("#cut-preview").textContent = "▶ گوش دادن زنده";
+}
+async function startPreview() {
+  const buffer = await getBuffer();
+  if (preview) { try { preview.src.stop(); } catch {} preview.ctx.close(); }
+  audio.pause();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const { src } = buildGraph(ctx, buffer, { a: cut.a, b: cut.b, fx: cut.fx, fade: $("#cut-fade").checked });
+  preview = { ctx, src };
+  src.onended = () => preview?.src === src && startPreview(); // loop the selection
+  $("#cut-preview").textContent = "⏹ توقف";
+}
+$("#cut-preview").onclick = () => (preview ? stopPreview() : startPreview().catch((e) => toast("⚠️ " + e.message)));
+
+function encodeMp3(buffer, kbps = 192) {
+  const ch = Math.min(2, buffer.numberOfChannels);
+  const enc = new lamejs.Mp3Encoder(ch, buffer.sampleRate, kbps);
+  const toInt16 = (f) => {
+    const out = new Int16Array(f.length);
+    for (let i = 0; i < f.length; i++) out[i] = Math.max(-1, Math.min(1, f[i])) * 0x7fff;
+    return out;
+  };
+  const left = toInt16(buffer.getChannelData(0));
+  const right = ch > 1 ? toInt16(buffer.getChannelData(1)) : null;
+  const chunks = [];
+  for (let i = 0; i < left.length; i += 1152) {
+    const l = left.subarray(i, i + 1152);
+    const m = right ? enc.encodeBuffer(l, right.subarray(i, i + 1152)) : enc.encodeBuffer(l);
+    if (m.length) chunks.push(new Uint8Array(m));
+  }
+  chunks.push(new Uint8Array(enc.flush()));
+  return new Blob(chunks, { type: "audio/mpeg" });
+}
+
+async function renderEdit() {
+  const buffer = await getBuffer();
+  const rate = RATE[cut.fx] || 1;
+  const sr = buffer.sampleRate;
+  const len = Math.ceil(((cut.b - cut.a) / rate) * sr);
+  const off = new OfflineAudioContext(Math.min(2, buffer.numberOfChannels), len, sr);
+  buildGraph(off, buffer, { a: cut.a, b: cut.b, fx: cut.fx, fade: $("#cut-fade").checked });
+  $("#edit-status").textContent = "🎛 در حال پردازش...";
+  const rendered = await off.startRendering();
+  $("#edit-status").textContent = "💾 ساخت mp3...";
+  await new Promise((r) => setTimeout(r, 30));
+  return encodeMp3(rendered);
+}
+
+$("#cut-send").onclick = async () => {
+  const t = player.cur;
+  if (!t) return;
+  if (!window.lamejs) return toast("⚠️ کتابخانه mp3 لود نشد؛ اینترنت رو چک کن");
+  const btn = $("#cut-send");
+  btn.disabled = true;
+  stopPreview();
+  try {
+    const blob = await renderEdit();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const PART = 700 * 1024;
+    const total = Math.ceil(bytes.length / PART);
+    const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const fxLabel = $(`#fx-chips [data-fx="${cut.fx}"]`)?.textContent.replace(/^\S+\s/, "") || "";
+    const label = [`${fmt(cut.a)}-${fmt(cut.b)}`, cut.fx && fxLabel].filter(Boolean).join(" ");
+    for (let i = 0; i < total; i++) {
+      $("#edit-status").textContent = `📤 ارسال ${i + 1} از ${total}...`;
+      const last = i === total - 1;
+      await call("uploadEdit", {
+        token, idx: i, data: bytesToB64(bytes.subarray(i * PART, (i + 1) * PART)), last,
+        ...(last ? { meta: { id: t.id, label, voice: $("#cut-fmt").value === "voice" } } : {}),
+      });
+    }
+    $("#edit-status").textContent = "✅ تو چت ربات فرستادم";
+    haptic("heavy");
+  } catch (e) {
+    $("#edit-status").textContent = "⚠️ " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 /* ---------------- listen (recognition) ---------------- */
 let recorder = null;
-async function recognizeBlob(blob, name = "rec.webm") {
+async function recognizeBlob(blob) {
   $("#listen-status").textContent = "🔍 دارم پیدا می‌کنم...";
-  const fd = new FormData();
-  fd.append("hum", $("#hum").checked ? "1" : "0");
-  fd.append("audio", blob, name);
   const el = $("#listen-result");
   el.innerHTML = "";
   try {
-    const r = await api("/api/recognize", { method: "POST", body: fd });
+    if (blob.size > 6 * 1024 * 1024) throw new Error("فایل بزرگه؛ یه تیکه کوتاه‌تر (زیر ۶ مگ) انتخاب کن");
+    const r = await call("recognize", {
+      data: bytesToB64(new Uint8Array(await blob.arrayBuffer())),
+      mime: blob.type || "audio/webm",
+      hum: $("#hum").checked,
+    });
     if (r.match) {
       const m = r.match;
       el.innerHTML = `<div class="match"><img src="${esc(m.cover || r.tracks[0]?.thumb || PLACEHOLDER)}"><div>
@@ -457,10 +668,12 @@ async function recognizeBlob(blob, name = "rec.webm") {
       $("#listen-status").textContent = "✅ پیدا شد!";
     } else if (r.transcript) {
       el.innerHTML = `<div class="match"><div><b>📝 چیزی که شنیدم:</b><p>«${esc(r.transcript)}»</p>
-        ${r.lyric_hits.length ? "<small>آهنگ‌هایی با این متن: " + r.lyric_hits.map(esc).join("، ") + "</small>" : ""}</div></div>`;
+        ${r.lyricHits.length ? "<small>آهنگ‌هایی با این متن: " + r.lyricHits.map(esc).join("، ") + "</small>" : ""}</div></div>`;
       $("#listen-status").textContent = "با متنی که خوندی گشتم 👇";
     } else {
-      $("#listen-status").textContent = "😕 پیدا نشد؛ دوباره نزدیک‌تر امتحان کن یا متن آهنگ رو جستجو کن";
+      $("#listen-status").textContent = r.configured
+        ? "😕 پیدا نشد؛ نزدیک‌تر امتحان کن یا متن آهنگ رو جستجو کن"
+        : "⚠️ سرویس تشخیص آهنگ هنوز تنظیم نشده (ادمین ربات باید کلیدش رو وارد کنه)";
     }
     const list = document.createElement("div");
     list.className = "list";
@@ -482,33 +695,34 @@ $("#listen-btn").onclick = async () => {
   }
   const wasPlaying = !audio.paused;
   audio.pause();
+  stopPreview();
   const chunks = [];
   recorder = new MediaRecorder(stream);
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  recorder.onstop = () => {
-    stream.getTracks().forEach((t) => t.stop());
-    clearInterval(timer);
-    $("#listen-btn").classList.remove("rec");
-    $("#listen-label").innerHTML = "🎧<br>گوش بده";
-    recognizeBlob(new Blob(chunks, { type: recorder.mimeType }), recorder.mimeType.includes("mp4") ? "rec.mp4" : "rec.webm");
-    if (wasPlaying) audio.play();
-  };
   const secs = $("#hum").checked ? 15 : 12;
   let left = secs;
-  recorder.start();
-  haptic("medium");
-  $("#listen-btn").classList.add("rec");
-  $("#listen-status").textContent = $("#hum").checked ? "🎤 بخون یا زمزمه کن..." : "👂 دارم گوش می‌دم...";
-  $("#listen-label").innerHTML = `${left}<br>ثانیه`;
   const timer = setInterval(() => {
     left -= 1;
     $("#listen-label").innerHTML = `${left}<br>ثانیه`;
     if (left <= 0 && recorder.state === "recording") recorder.stop();
   }, 1000);
+  recorder.onstop = () => {
+    stream.getTracks().forEach((t) => t.stop());
+    clearInterval(timer);
+    $("#listen-btn").classList.remove("rec");
+    $("#listen-label").innerHTML = "🎧<br>گوش بده";
+    recognizeBlob(new Blob(chunks, { type: recorder.mimeType }));
+    if (wasPlaying) audio.play();
+  };
+  recorder.start();
+  haptic("medium");
+  $("#listen-btn").classList.add("rec");
+  $("#listen-status").textContent = $("#hum").checked ? "🎤 بخون یا زمزمه کن..." : "👂 دارم گوش می‌دم...";
+  $("#listen-label").innerHTML = `${left}<br>ثانیه`;
 };
 $("#listen-file").onchange = (e) => {
   const f = e.target.files[0];
-  if (f) recognizeBlob(f, f.name);
+  if (f) recognizeBlob(f);
   e.target.value = "";
 };
 
@@ -517,7 +731,7 @@ let libCache = null;
 async function loadLibrary() {
   $("#lib-cards").innerHTML = '<p class="empty">...</p>';
   try {
-    libCache = await api("/api/library");
+    libCache = await call("library");
   } catch (e) {
     $("#lib-cards").innerHTML = `<p class="empty">${esc(e.message)}</p>`;
     return;
@@ -546,25 +760,26 @@ async function openCollection(key) {
     return;
   }
   const p = libCache.playlists.find((x) => String(x.id) === key);
+  const id = Number(key);
   $("#lib-title").textContent = "📁 " + (p?.name || "");
   $("#lib-actions").innerHTML = '<button class="icon" id="pl-rename">✏️</button><button class="icon" id="pl-del">🗑</button>';
   $("#pl-rename").onclick = async () => {
     const name = prompt("اسم جدید:", p.name);
     if (!name) return;
-    await api(`/api/playlists/${key}`, { method: "PATCH", json: { name } });
+    await call("playlist", { op: "rename", id, name });
     p.name = name;
     $("#lib-title").textContent = "📁 " + name;
   };
   $("#pl-del").onclick = async () => {
     if (!confirm("این پلی‌لیست حذف بشه؟")) return;
-    await api(`/api/playlists/${key}`, { method: "DELETE" });
+    await call("playlist", { op: "delete", id });
     $("#lib-back").click();
   };
-  libTracks = await api(`/api/playlists/${key}`);
+  libTracks = await call("playlist", { op: "get", id });
   renderList(list, libTracks, {
     emptyText: "خالیه؛ از دکمه ➕ تو پلیر آهنگ اضافه کن",
     onRemove: async (t, row) => {
-      await api(`/api/playlists/${key}/tracks/${t.id}`, { method: "DELETE" });
+      await call("playlist", { op: "remove", id, trackId: t.id });
       libTracks = libTracks.filter((x) => x.id !== t.id);
       row.remove();
     },
@@ -585,7 +800,7 @@ $("#lib-shuffle").onclick = () => {
 $("#new-pl").onclick = async () => {
   const name = prompt("اسم پلی‌لیست جدید:");
   if (!name) return;
-  await api("/api/playlists", { method: "POST", json: { name } });
+  await call("playlist", { op: "create", name }).catch((e) => toast(e.message));
   loadLibrary();
 };
 
@@ -597,7 +812,7 @@ async function loadHistory() {
   el.innerHTML = '<p class="empty">...</p>';
   let rows;
   try {
-    rows = await api(`/api/history${histKind ? "?kind=" + histKind : ""}`);
+    rows = await call("history", histKind ? { kind: histKind } : {});
   } catch (e) {
     el.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
     return;
@@ -640,19 +855,34 @@ $$("#hist-chips .chip").forEach((c) => (c.onclick = () => {
 }));
 $("#hist-clear").onclick = async () => {
   if (!confirm("کل تاریخچه پاک بشه؟")) return;
-  await api("/api/history", { method: "DELETE" });
+  await call("history", { clear: true });
   loadHistory();
 };
 
-/* ---------------- deep link: /app/?t=ID&cut=1 ---------------- */
+/* ---------------- deep link from the chat: ?t=ID&edit=cut|ringtone|slow|...&a=&b= ---------------- */
 (async () => {
   const p = new URLSearchParams(location.search);
-  const tid = p.get("t") || tg?.initDataUnsafe?.start_param?.replace(/^t/, "");
+  const tid = p.get("t");
   if (!tid) return;
   try {
-    const t = await api(`/api/track/${tid}`);
+    const t = await call("track", { id: Number(tid) });
     player.playList([t], 0);
-    if (p.get("cut")) togglePanel("cut", true);
+    const edit = p.get("edit");
+    if (!edit) return;
+    togglePanel("edit", true);
+    if (edit !== "cut" && edit !== "ringtone") $(`#fx-chips [data-fx="${edit}"]`)?.click();
+    if (edit === "ringtone") cut.track = null; // default selection is the 30 s ringtone part
+    const a = parseFloat(p.get("a")), b = parseFloat(p.get("b"));
+    if (isFinite(a) && isFinite(b)) {
+      cut.track = t.id;
+      cut.a = a;
+      cut.b = b;
+    } else if (edit !== "ringtone" && edit !== "cut") {
+      cut.track = t.id;
+      cut.a = 0;
+      cut.b = t.duration || 600;
+    }
+    drawCut();
   } catch (e) {
     toast(e.message);
   }
