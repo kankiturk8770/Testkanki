@@ -67,13 +67,18 @@
   <path d="M256 104 L384 144 Q378 318 256 414 Q134 318 128 144 Z" fill="url(#inner)"/>
   <path d="M256 104 L384 144 Q378 318 256 414 Q134 318 128 144 Z" fill="none" stroke="#FFC72C" stroke-opacity=".55" stroke-width="2"/>
 
-  <!-- K built from a music note: the stem is the K's spine, the note head sits at its foot,
-       the upper arm is the note's flag -->
+  <!-- K built from a music note: the stem is the K's spine, the note head sits at its foot, and both
+       arms grow out of one point on the stem, like a real K -->
+  <linearGradient id="goldK" gradientUnits="userSpaceOnUse" x1="0" y1="150" x2="0" y2="350">
+    <stop offset="0" stop-color="#FFF2B8"/><stop offset=".45" stop-color="#FFC72C"/><stop offset="1" stop-color="#C98208"/>
+  </linearGradient>
   <g filter="url(#soft)">
-    <rect x="214" y="150" width="30" height="168" rx="7" fill="url(#gold)"/>
-    <ellipse cx="206" cy="322" rx="36" ry="26" transform="rotate(-22 206 322)" fill="url(#gold)"/>
-    <path d="M244 236 L322 166 Q334 158 342 168 L346 174 Q350 184 340 192 L266 256 Z" fill="url(#gold)"/>
-    <path d="M262 244 L334 318 Q340 326 333 333 L326 340 Q318 346 310 338 L242 268 Z" fill="url(#gold)"/>
+    <g stroke="url(#goldK)" stroke-width="30" stroke-linecap="round" fill="none">
+      <path d="M234 252 L326 172"/>
+      <path d="M234 252 L326 330"/>
+    </g>
+    <rect x="212" y="150" width="32" height="172" rx="8" fill="url(#goldK)"/>
+    <ellipse cx="204" cy="324" rx="37" ry="27" transform="rotate(-22 204 324)" fill="url(#goldK)"/>
   </g>
   <!-- three equaliser bars under the K -->
   <g fill="#FFC72C" filter="url(#soft)">
