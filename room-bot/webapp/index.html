@@ -32,6 +32,16 @@
 <div class="card status" id="status"><span class="dot"></span><span id="status-text">در حال بررسی…</span></div>
 
 <div class="card">
+  <b>راه سریع (پیشنهادی):</b>
+  <ol>
+    <li>این دستور رو کپی کن: <button id="copy-curl">📋 کپی دستور curl</button></li>
+    <li>تو cron-job.org، صفحه‌ی ساخت cronjob، پایین صفحه <b>IMPORT FROM CURL</b> رو بزن، دستور رو paste کن و تأیید کن.</li>
+    <li>تو تب <b>COMMON</b> زمان اجرا رو <b>Every 1 minute</b> کن، بعد <b>CREATE</b>.</li>
+  </ol>
+</div>
+
+<div class="card">
+  <b>راه دستی:</b>
   <ol>
     <li>برو به <b class="k">cron-job.org</b> و رایگان ثبت‌نام کن.
       <button class="ghost" id="open-site">باز کردن cron-job.org</button></li>
@@ -65,6 +75,8 @@
   };
   $("#copy-url").onclick = (e) => copy(url, e.target);
   $("#copy-auth").onclick = (e) => copy(auth, e.target);
+  const curl = `curl -X POST '${url}' -H 'Content-Type: application/json' -H 'Authorization: ${auth}' -d '{}'`;
+  $("#copy-curl").onclick = (e) => copy(curl, e.target);
   $("#open-site").onclick = () => (tg?.openLink ? tg.openLink("https://console.cron-job.org/signup") : open("https://console.cron-job.org/signup"));
   function check() {
     if (!tg?.Serverless) return show(false, "این صفحه رو از داخل ربات باز کن");
