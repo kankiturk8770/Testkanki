@@ -46,6 +46,7 @@ const ICONS = {
   list: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><circle cx="3.5" cy="6" r="1" fill="currentColor"/><circle cx="3.5" cy="12" r="1" fill="currentColor"/><circle cx="3.5" cy="18" r="1" fill="currentColor"/>',
   down: '<path d="M6 9l6 6 6-6"/>',
   back: '<path d="M9 18l6-6-6-6"/>',
+  chat: '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8"/><path d="M8 13h5"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   trash: '<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
   pencil: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
@@ -95,9 +96,21 @@ function bytesToB64(bytes) {
   return btoa(s);
 }
 
+/** One endpoint call, retried twice (a part can fail on a busy server). */
+async function callRetry(name, input) {
+  for (let i = 0; ; i++) {
+    try {
+      return await call(name, input);
+    } catch (e) {
+      if (i >= 2) throw e;
+      await new Promise((r) => setTimeout(r, 600 * (i + 1)));
+    }
+  }
+}
+
 /** A file the bot hands out in base64 parts (endpoint responses are capped at ~2 MB). */
 async function fetchParts(name, input, onProgress) {
-  const first = await call(name, { ...input, idx: 0 });
+  const first = await callRetry(name, { ...input, idx: 0 });
   const parts = new Array(first.total);
   parts[0] = b64ToBytes(first.data);
   let done = 1;
@@ -106,7 +119,7 @@ async function fetchParts(name, input, onProgress) {
   // three at a time: faster start, still light on the bot
   for (let i = 0; i < rest.length; i += 3) {
     await Promise.all(rest.slice(i, i + 3).map(async (idx) => {
-      parts[idx] = b64ToBytes((await call(name, { ...input, idx })).data);
+      parts[idx] = b64ToBytes((await callRetry(name, { ...input, idx })).data);
       onProgress?.(++done, first.total);
     }));
   }
@@ -120,6 +133,7 @@ function setTheme(t) {
   store.set("theme", t);
 }
 setTheme(store.get("theme", "gold"));
+$("#bot-btn").onclick = $("#player-bot").onclick = () => (tg?.close ? tg.close() : history.back());
 $("#theme-btn").onclick = () => {
   setTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.theme) + 1) % THEMES.length]);
   haptic();
@@ -353,13 +367,33 @@ function playDirect(s, seq, autoplay) {
   });
 }
 
+/** HLS playlist -> one file (init segment + all media segments), fetched by the browser. */
+async function hlsBlob(url) {
+  const text = await (await fetch(url)).text();
+  const abs = (u) => (/^https?:/.test(u) ? u : new URL(u, url).href);
+  const map = text.match(/#EXT-X-MAP:URI="([^"]+)"/);
+  const urls = [...(map ? [map[1]] : []), ...text.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"))].map(abs);
+  const parts = new Array(urls.length);
+  for (let i = 0; i < urls.length; i += 4) {
+    await Promise.all(urls.slice(i, i + 4).map(async (u, k) => {
+      const r = await fetch(u);
+      if (!r.ok) throw new Error(`segment ${r.status}`);
+      parts[i + k] = await r.arrayBuffer();
+    }));
+  }
+  return new Blob(parts, { type: "audio/mp4" });
+}
+
 /** Bytes of the current song for the cutter: straight from the CDN when possible. */
 async function songBlob(t) {
-  if (t.stream?.kind === "file") {
-    try {
+  try {
+    if (t.stream?.kind === "file") {
       const r = await fetch(t.stream.url);
       if (r.ok) return await r.blob();
-    } catch {}
+    }
+    if (t.stream?.kind === "hls") return await hlsBlob(t.stream.url);
+  } catch (e) {
+    console.warn("cdn fetch failed, using the bot's copy", e);
   }
   return (await loadAudio(t)).blob;
 }
@@ -664,10 +698,16 @@ function encodeMp3(buffer, kbps = 192) {
 
 /** The selection with a short fade in/out, as mp3. */
 async function renderCut() {
-  const blob = await songBlob(player.cur);
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
-  ctx.close();
+  let buf;
+  try {
+    buf = await ctx.decodeAudioData(await (await songBlob(player.cur)).arrayBuffer());
+  } catch {
+    // the CDN copy could not be decoded here: use the bot's copy of the song
+    buf = await ctx.decodeAudioData(await (await loadAudio(player.cur)).blob.arrayBuffer());
+  } finally {
+    ctx.close();
+  }
   const sr = buf.sampleRate, dur = cut.b - cut.a;
   const off = new OfflineAudioContext(Math.min(2, buf.numberOfChannels), Math.ceil(dur * sr), sr);
   const src = off.createBufferSource();

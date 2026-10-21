@@ -321,3 +321,10 @@ body.player-open .mini { display: none; }
 .cut-lbl { width: 42px; font-size: .82rem; color: var(--gold-light); font-weight: 800; }
 .cut-row b { width: 44px; text-align: center; font-size: .85rem; direction: ltr; }
 .cut-row input { flex: 1; }
+
+/* nothing may be wider than the screen: a long link once pushed the whole app sideways */
+html, body { max-width: 100%; overflow-x: hidden; }
+.view, .list, .item, .qline, .match, .card, .tile { min-width: 0; max-width: 100%; }
+.qline { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top-actions { display: flex; align-items: center; gap: 6px; }
+.bot-pill { padding: 5px 11px; font-size: .78rem; color: var(--gold-light); }

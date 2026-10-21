@@ -76,7 +76,9 @@ export async function ensureAudio(track, userId) {
 /** Bytes of the track's audio (Bot API getFile limit: 20 MB). */
 export async function audioBytes(track, userId) {
   const f = await ensureAudio(track, userId);
-  return { bytes: await api.getFileContent(f.fileId), size: f.size };
+  // Telegram's file download fails now and then; one retry covers it
+  const bytes = await api.getFileContent(f.fileId).catch(() => api.getFileContent(f.fileId));
+  return { bytes, size: f.size };
 }
 
 export { fileName };
