@@ -3,12 +3,13 @@
 //   search:   YouTube (InnerTube, no key) + SoundCloud (public web client id)
 //   audio:    SoundCloud — native, HLS segments joined into an .m4a (AAC 160k)
 //             YouTube    — 1) "cobalt" download service if configured (any quality, mp3)
-//                          2) native InnerTube (m4a 128k), 3) the same song on SoundCloud
-//   video:    cobalt service (360p…1080p); native fallback is 360p only
+//                          2) native InnerTube app clients (m4a 128k), 3) the same song on SoundCloud
+//   video:    cobalt if configured, else native: HD video + m4a joined by lib/mp4mux.js (no re-encode)
 //   links:    Instagram / TikTok / … through cobalt
 import { fetch } from 'sdk';
 import { getSetting, setSetting } from './store.js';
 import { concatBytes, readBytes } from './util.js';
+import { muxAV } from './mp4mux.js';
 
 export const AUDIO_QUALITIES = ['128', '192', '320'];
 export const VIDEO_QUALITIES = ['360', '480', '720', '1080'];
@@ -67,47 +68,81 @@ export function youtubeId(url) {
   return m ? m[1] : null;
 }
 
-// Direct stream URLs from the InnerTube player. Works when YouTube trusts the caller's IP.
+// Direct stream URLs from the InnerTube player. The iOS/Android app clients are accepted from
+// Telegram's servers (the web clients get "Sign in to confirm you're not a bot").
+const YT_CLIENTS = [
+  [{ clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.2.22D82' },
+    'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)'],
+  [{ clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 30, osName: 'Android', osVersion: '11' },
+    'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'],
+  [{ clientName: 'ANDROID_VR', clientVersion: '1.62.27', deviceMake: 'Oculus', deviceModel: 'Quest 3', androidSdkVersion: 32, osName: 'Android', osVersion: '12L' },
+    'com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12L) gzip'],
+];
+
 async function ytPlayer(videoId) {
-  const client = { clientName: 'ANDROID_VR', clientVersion: '1.62.27', deviceMake: 'Oculus', deviceModel: 'Quest 3',
-    androidSdkVersion: 32, osName: 'Android', osVersion: '12L', hl: 'en' };
-  const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12L) gzip' },
-    body: JSON.stringify({ context: { client }, videoId, contentCheckOk: true, racyCheckOk: true }),
-  });
-  const j = await res.json();
-  if (j?.playabilityStatus?.status !== 'OK') throw new Error(`youtube: ${j?.playabilityStatus?.reason || 'unavailable'}`);
-  return j.streamingData || {};
+  let reason = 'unavailable';
+  for (const [client, ua] of YT_CLIENTS) {
+    const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': ua },
+      body: JSON.stringify({ context: { client: { ...client, hl: 'en' } }, videoId, contentCheckOk: true, racyCheckOk: true }),
+    });
+    const j = await res.json().catch(() => ({}));
+    const sd = j?.streamingData;
+    if (j?.playabilityStatus?.status === 'OK' && sd && [...(sd.formats || []), ...(sd.adaptiveFormats || [])].some((f) => f.url)) {
+      return { formats: [...(sd.formats || []), ...(sd.adaptiveFormats || [])].filter((f) => f.url), ua };
+    }
+    reason = j?.playabilityStatus?.reason || reason;
+  }
+  throw new Error(`youtube: ${reason}`);
 }
 
-// googlevideo throttles big single requests; fetch in 4 MB ranges.
-async function rangedDownload(url, size) {
+// googlevideo throttles big single requests; fetch 2 MB ranges, 4 at a time.
+async function rangedDownload(url, size, ua) {
+  const step = 2 * 1024 * 1024;
+  const ranges = [];
+  for (let start = 0; start < size; start += step) ranges.push([start, Math.min(size, start + step) - 1]);
   const parts = [];
-  const step = 4 * 1024 * 1024;
-  for (let start = 0; start < size; start += step) {
-    const end = Math.min(size, start + step) - 1;
-    const res = await fetch(`${url}&range=${start}-${end}`, { headers: { 'User-Agent': UA } });
-    if (!res.ok) throw new Error(`youtube download ${res.status}`);
-    parts.push(await readBytes(res));
+  for (let i = 0; i < ranges.length; i += 4) {
+    parts.push(...(await Promise.all(ranges.slice(i, i + 4).map(async ([a, b]) => {
+      const res = await fetch(`${url}&range=${a}-${b}`, { headers: { 'User-Agent': ua } });
+      if (!res.ok) throw new Error(`youtube download ${res.status}`);
+      return readBytes(res);
+    }))));
   }
   return concatBytes(parts);
 }
 
+const sizeOf = (f) => Number(f.contentLength) || Math.round(((f.bitrate || f.averageBitrate || 0) / 8) * (Number(f.approxDurationMs) / 1000 || 0));
+
 async function ytNativeAudio(videoId) {
-  const sd = await ytPlayer(videoId);
-  const f = (sd.adaptiveFormats || []).find((x) => x.itag === 140 && x.url); // m4a AAC 128k
+  const { formats, ua } = await ytPlayer(videoId);
+  const f = formats.find((x) => x.itag === 140) || formats.find((x) => x.mimeType.startsWith('audio/mp4'));
   if (!f) throw new Error('youtube: no m4a stream');
-  return { bytes: await rangedDownload(f.url, Number(f.contentLength)), ext: 'm4a', mime: 'audio/mp4' };
+  return { bytes: await rangedDownload(f.url, sizeOf(f), ua), ext: 'm4a', mime: 'audio/mp4' };
 }
 
-async function ytNativeVideo(videoId) {
-  const sd = await ytPlayer(videoId);
-  const f = (sd.formats || []).find((x) => x.itag === 18 && x.url); // 360p mp4 with sound
-  if (!f) throw new Error('youtube: no 360p stream');
-  const size = Number(f.contentLength) || 0;
-  const bytes = size ? await rangedDownload(f.url, size) : await readBytes(await fetch(f.url));
-  return { bytes, ext: 'mp4', mime: 'video/mp4', height: '360' };
+const LIMIT = 49 * 1024 * 1024;
+
+// H.264 video-only stream (largest that fits under `height`) + m4a, joined by mp4mux.
+async function ytNativeVideo(videoId, height) {
+  const { formats, ua } = await ytPlayer(videoId);
+  const audioF = formats.find((x) => x.itag === 140);
+  const videos = formats
+    .filter((x) => x.mimeType.startsWith('video/mp4') && x.mimeType.includes('avc1') && !x.audioQuality && x.height <= Number(height))
+    .sort((x, y) => y.height - x.height);
+  for (const vf of videos) {
+    if (!audioF || sizeOf(vf) + sizeOf(audioF) > LIMIT) continue;
+    const [v, a] = await Promise.all([rangedDownload(vf.url, sizeOf(vf), ua), rangedDownload(audioF.url, sizeOf(audioF), ua)]);
+    return { bytes: muxAV(v, a), ext: 'mp4', mime: 'video/mp4', height: String(vf.height) };
+  }
+  const prog = formats.find((x) => x.itag === 18); // 360p with sound, no muxing needed
+  if (prog) {
+    const size = sizeOf(prog);
+    const bytes = size ? await rangedDownload(prog.url, size, ua) : await readBytes(await fetch(prog.url, { headers: { 'User-Agent': ua } }));
+    return { bytes, ext: 'mp4', mime: 'video/mp4', height: '360' };
+  }
+  throw new Error(videos.length ? 'ویدیو از ۵۰ مگابایت بزرگ‌تره؛ کیفیت پایین‌تر رو انتخاب کن' : 'youtube: no video stream');
 }
 
 // ---------------- SoundCloud ----------------
@@ -283,7 +318,13 @@ export async function downloadVideo(track, height = '720') {
     vid = yt && youtubeId(yt.url);
   }
   if (!vid) throw new Error('ویدیویی برای این آهنگ پیدا نشد');
-  return ytNativeVideo(vid);
+  try {
+    return await ytNativeVideo(vid, height);
+  } catch (e) {
+    // Without a PO token googlevideo serves only the first ~1 MB to servers.
+    if (/403/.test(e.message)) throw new Error('یوتیوب دانلود ویدیو رو از سرور بسته؛ ادمین باید سرویس دانلود (cobalt_url) رو تنظیم کنه');
+    throw e;
+  }
 }
 
 /** A pasted link -> track (YouTube / SoundCloud natively, other sites as a generic "link" track). */

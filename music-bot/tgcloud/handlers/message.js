@@ -89,10 +89,11 @@ export default async function (msg) {
     const mime = media.mime_type || (msg.voice ? 'audio/ogg' : 'video/mp4');
     if (msg.document && !/^(audio|video)\//.test(mime)) return send(chatId, 'فقط فایل صوتی یا ویدیویی رو می‌تونم بررسی کنم.');
     if ((media.file_size || 0) > 20 * 1024 * 1024) return send(chatId, '⚠️ ربات فایل بیشتر از ۲۰ مگ رو نمی‌تونه بگیره؛ یه تیکه کوتاه‌تر بفرست.');
-    const bytes = await api.getFileContent(media.file_id);
+    await store.setState(uid, 'recfile', JSON.stringify({ fileId: media.file_id, mime }));
     const hum = /زمزمه|هامینگ|خوندم|hum/i.test(msg.caption || '');
     const ext = mime.split('/')[1]?.split(';')[0] || 'bin';
-    return runRecognition(chatId, uid, { bytes, name: `sample.${ext}`, mime }, hum);
+    const sample = async () => ({ bytes: await api.getFileContent(media.file_id), name: `sample.${ext}`, mime });
+    return runRecognition(chatId, uid, sample, hum, '?rec=1');
   }
 
   const text = (msg.text || '').trim();

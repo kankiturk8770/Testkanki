@@ -4,7 +4,7 @@ import * as store from './store.js';
 import { search, remixes, fromUrl, linkMedia, downloadAudio } from './sources.js';
 import { recognize, queryOf } from './recognize.js';
 import { TooBig } from './deliver.js';
-import { cardKeyboard, resultsKeyboard, trackName } from './ui.js';
+import { cardKeyboard, resultsKeyboard, trackName, appButton } from './ui.js';
 import { esc, fmtTime } from './util.js';
 
 export const send = (chatId, text, extra = {}) =>
@@ -75,10 +75,22 @@ export async function openLink(chatId, userId, url) {
   return showCard(chatId, userId, t);
 }
 
-/** sample: { bytes, name, mime } */
-export async function runRecognition(chatId, userId, sample, hum = false) {
+async function shazamKeyboard(params) {
+  const b = params && (await appButton('🔍 تشخیص با Shazam', params));
+  return b ? { reply_markup: { inline_keyboard: [[b]] } } : {};
+}
+
+/**
+ * sample: { bytes, name, mime } or an async function returning it. shazamParams: Mini App query that re-runs this sample through
+ * Shazam in the browser (fingerprinting can't run on the server), offered when nothing else finds it.
+ */
+export async function runRecognition(chatId, userId, sample, hum = false, shazamParams = null) {
+  const configured = await store.getSetting('audd_token') || await store.getSetting('acr_key') || await store.getSetting('acr_hum_key') || await store.getSetting('stt_key');
+  if (!configured && shazamParams) {
+    return send(chatId, '🔍 برای تشخیص این آهنگ دکمه زیر رو بزن (Shazam، رایگان):', await shazamKeyboard(shazamParams));
+  }
   const status = await send(chatId, hum ? '🎤 دارم به صدات گوش می‌دم...' : '🎧 دارم گوش می‌دم...');
-  const res = await recognize(sample, { hum });
+  const res = await recognize(typeof sample === 'function' ? await sample() : sample, { hum });
   if (res.match) {
     const m = res.match;
     const tracks = await store.upsertTracks(await search(queryOf(m), 8));
@@ -98,16 +110,21 @@ export async function runRecognition(chatId, userId, sample, hum = false) {
       (hits ? `آهنگ‌هایی که این متن رو دارن:\n${hits}\n\n` : '') + 'نتایج 👇',
       tracks.length ? { reply_markup: await resultsKeyboard(tracks) } : {});
   }
-  return edit(status, res.configured === false
-    ? '⚠️ هنوز هیچ سرویس تشخیص آهنگی تنظیم نشده. ادمین باید با /set کلید AudD یا ACRCloud رو وارد کنه.'
-    : '😕 نتونستم تشخیص بدم.\n• ۱۰ تا ۱۵ ثانیه صدای واضح بفرست\n• یا یه تیکه از متن آهنگ رو بنویس\n• یا تو مینی‌اپ دکمه «گوش بده» رو بزن');
+  return edit(status, shazamParams
+    ? '😕 پیدا نشد. با Shazam هم امتحان کن 👇\n(یا یه تیکه از متن آهنگ رو بنویس)'
+    : '😕 نتونستم تشخیص بدم.\n• ۱۰ تا ۱۵ ثانیه صدای واضح بفرست\n• یا یه تیکه از متن آهنگ رو بنویس\n• یا تو مینی‌اپ دکمه «گوش بده» رو بزن',
+  await shazamKeyboard(shazamParams));
 }
 
 /** "What song is in this video/link?" */
 export async function recognizeTrack(chatId, userId, t) {
+  if (!(await store.getSetting('audd_token')) && !(await store.getSetting('acr_key'))) {
+    return send(chatId, '🔍 برای تشخیص آهنگ دکمه زیر رو بزن (Shazam، رایگان):', await shazamKeyboard(`?t=${t.id}&shazam=1`));
+  }
   const media = t.source === 'youtube' || t.source === 'soundcloud'
     ? await downloadAudio(t, '128')
     : await linkMedia(t.url);
   if (!media) return send(chatId, '⚠️ برای تشخیص آهنگ لینک‌های اینستا/تیک‌تاک، ادمین باید سرویس دانلود (cobalt_url) رو تنظیم کنه. فعلاً خود ویدیو رو اینجا بفرست.');
-  return runRecognition(chatId, userId, { bytes: media.bytes.subarray(0, 4.5 * 1024 * 1024), name: `sample.${media.ext}`, mime: media.mime });
+  return runRecognition(chatId, userId, { bytes: media.bytes.subarray(0, 4.5 * 1024 * 1024), name: `sample.${media.ext}`, mime: media.mime },
+    false, `?t=${t.id}&shazam=1`);
 }

@@ -648,37 +648,98 @@ $("#cut-send").onclick = async () => {
 };
 
 /* ---------------- listen (recognition) ---------------- */
+// Shazam fingerprints are computed here, in the browser (WebAssembly can't run on the bot's
+// serverless backend); the "shazam" endpoint only asks Shazam's API what the fingerprint is.
+const SHAZAMIO = "https://cdn.jsdelivr.net/npm/shazamio-core@1.3.1/web/";
+let shazamLib = null;
+function shazamCore() {
+  shazamLib ??= (async () => {
+    const m = await import(SHAZAMIO + "shazamio-core.js");
+    await m.default(SHAZAMIO + "shazamio-core_bg.wasm");
+    return m;
+  })().catch((e) => ((shazamLib = null), Promise.reject(e)));
+  return shazamLib;
+}
+
+async function decodeBlob(blob) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  try {
+    return await ctx.decodeAudioData(await blob.arrayBuffer());
+  } finally {
+    ctx.close();
+  }
+}
+
+function monoSlice(buf, start, secs) {
+  const from = Math.floor(start * buf.sampleRate);
+  const len = Math.min(buf.length - from, Math.floor(secs * buf.sampleRate));
+  const out = new Float32Array(Math.max(0, len));
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < out.length; i++) out[i] += d[from + i] / buf.numberOfChannels;
+  }
+  return out;
+}
+
+/** Shazam on a recording / file: a few 12 s windows until one matches. -> endpoint result or null */
+async function shazamBlob(blob) {
+  const [m, buf] = await Promise.all([shazamCore(), decodeBlob(blob)]);
+  const d = buf.duration;
+  const starts = d <= 16 ? [0] : [0.2, 0.45, 0.7].map((f) => Math.max(0, d * f - 6));
+  for (const st of starts) {
+    const sig = m.DecodedSignature.new(monoSlice(buf, st, 12), buf.sampleRate, 1);
+    const input = { uri: sig.uri, samplems: sig.samplems };
+    sig.free();
+    const r = await call("shazam", input);
+    if (r.match) return r;
+  }
+  return null;
+}
+
+function showRecognition(r, el) {
+  if (r.match) {
+    const m = r.match;
+    el.innerHTML = `<div class="match"><img src="${esc(m.cover || r.tracks[0]?.thumb || PLACEHOLDER)}"><div>
+      <h3>${esc(m.title)}</h3><p class="muted">${esc(m.artist || "")}${m.album ? " · " + esc(m.album) : ""}</p><small>با ${esc(m.engine)}</small></div></div>`;
+    haptic("heavy");
+    $("#listen-status").textContent = "✅ پیدا شد!";
+  } else if (r.transcript) {
+    el.innerHTML = `<div class="match"><div><b>📝 چیزی که شنیدم:</b><p>«${esc(r.transcript)}»</p>
+      ${r.lyricHits.length ? "<small>آهنگ‌هایی با این متن: " + r.lyricHits.map(esc).join("، ") + "</small>" : ""}</div></div>`;
+    $("#listen-status").textContent = "با متنی که خوندی گشتم 👇";
+  } else {
+    $("#listen-status").textContent = "😕 پیدا نشد؛ نزدیک‌تر یا با صدای واضح‌تر امتحان کن، یا یه تیکه از متن آهنگ رو جستجو کن";
+  }
+  const list = document.createElement("div");
+  list.className = "list";
+  el.appendChild(list);
+  if (r.tracks?.length) renderList(list, r.tracks);
+}
+
 let recorder = null;
 async function recognizeBlob(blob) {
-  $("#listen-status").textContent = "🔍 دارم پیدا می‌کنم...";
   const el = $("#listen-result");
   el.innerHTML = "";
+  const hum = $("#hum").checked;
   try {
-    if (blob.size > 6 * 1024 * 1024) throw new Error("فایل بزرگه؛ یه تیکه کوتاه‌تر (زیر ۶ مگ) انتخاب کن");
+    if (!hum) {
+      $("#listen-status").textContent = "🔍 دارم با Shazam پیدا می‌کنم...";
+      const r = await shazamBlob(blob).catch((e) => (console.warn("shazam", e), null));
+      if (r) return showRecognition(r, el);
+    }
+    // humming / singing, or Shazam didn't know it: the bot's other engines (AudD, ACRCloud, Whisper)
+    if (blob.size > 6 * 1024 * 1024) throw new Error("پیدا نشد؛ یه تیکه کوتاه‌تر (زیر ۶ مگ) امتحان کن");
+    $("#listen-status").textContent = hum ? "🎤 دارم به صدات گوش می‌دم..." : "🔍 دارم بیشتر می‌گردم...";
     const r = await call("recognize", {
       data: bytesToB64(new Uint8Array(await blob.arrayBuffer())),
       mime: blob.type || "audio/webm",
-      hum: $("#hum").checked,
+      hum,
     });
-    if (r.match) {
-      const m = r.match;
-      el.innerHTML = `<div class="match"><img src="${esc(m.cover || r.tracks[0]?.thumb || PLACEHOLDER)}"><div>
-        <h3>${esc(m.title)}</h3><p class="muted">${esc(m.artist || "")}${m.album ? " · " + esc(m.album) : ""}</p><small>با ${esc(m.engine)}</small></div></div>`;
-      haptic("heavy");
-      $("#listen-status").textContent = "✅ پیدا شد!";
-    } else if (r.transcript) {
-      el.innerHTML = `<div class="match"><div><b>📝 چیزی که شنیدم:</b><p>«${esc(r.transcript)}»</p>
-        ${r.lyricHits.length ? "<small>آهنگ‌هایی با این متن: " + r.lyricHits.map(esc).join("، ") + "</small>" : ""}</div></div>`;
-      $("#listen-status").textContent = "با متنی که خوندی گشتم 👇";
-    } else {
-      $("#listen-status").textContent = r.configured
-        ? "😕 پیدا نشد؛ نزدیک‌تر امتحان کن یا متن آهنگ رو جستجو کن"
-        : "⚠️ سرویس تشخیص آهنگ هنوز تنظیم نشده (ادمین ربات باید کلیدش رو وارد کنه)";
+    if (!r.match && !r.transcript && !r.configured && hum) {
+      $("#listen-status").textContent = "⚠️ تشخیص زمزمه هنوز تنظیم نشده (ادمین باید کلید ACRCloud یا Whisper رو وارد کنه)";
+      return;
     }
-    const list = document.createElement("div");
-    list.className = "list";
-    el.appendChild(list);
-    if (r.tracks?.length) renderList(list, r.tracks);
+    showRecognition(r, el);
   } catch (e) {
     $("#listen-status").textContent = "⚠️ " + e.message;
   }
@@ -859,10 +920,30 @@ $("#hist-clear").onclick = async () => {
   loadHistory();
 };
 
-/* ---------------- deep link from the chat: ?t=ID&edit=cut|ringtone|slow|...&a=&b= ---------------- */
+/* ---------------- deep links from the chat ----------------
+   ?rec=1                       recognize the voice/video just sent in the chat
+   ?t=ID&shazam=1               recognize the song of a track/link
+   ?t=ID&edit=cut|ringtone|slow|...&a=&b=   open the editor */
 (async () => {
   const p = new URLSearchParams(location.search);
   const tid = p.get("t");
+  if (p.get("rec") || p.get("shazam")) {
+    showView("v-listen");
+    $("#listen-status").textContent = "⏳ دریافت فایل...";
+    try {
+      let blob;
+      if (p.get("rec")) {
+        const f = await call("pendingSample");
+        blob = new Blob([b64ToBytes(f.data)], { type: f.mime });
+      } else {
+        blob = (await loadAudio({ id: Number(tid) }, (n, total) => ($("#listen-status").textContent = `⏳ دریافت ${n} از ${total}`))).blob;
+      }
+      await recognizeBlob(blob);
+    } catch (e) {
+      $("#listen-status").textContent = "⚠️ " + e.message;
+    }
+    return;
+  }
   if (!tid) return;
   try {
     const t = await call("track", { id: Number(tid) });
