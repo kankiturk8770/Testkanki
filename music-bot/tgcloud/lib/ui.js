@@ -3,7 +3,7 @@ import { getSetting } from './store.js';
 import { esc, fmtTime } from './util.js';
 import { AUDIO_QUALITIES, VIDEO_QUALITIES } from './sources.js';
 
-const ICON = { youtube: '▶️', soundcloud: '☁️' };
+const ICON = { youtube: '▶️', soundcloud: '☁️', radiojavan: '📻', saavn: '🎶' };
 
 export const btn = (text, data) => ({ text, callback_data: data });
 
@@ -27,44 +27,40 @@ export function trackName(t) {
 }
 
 export async function resultsKeyboard(tracks, withApp = true) {
-  const rows = tracks.map((t) => {
+  const rows = tracks.slice(0, 10).map((t) => {
     const name = t.artist ? `${t.artist} - ${t.title}` : t.title;
-    return [btn(`${ICON[t.source] || '🌐'} ${name.slice(0, 48)} · ${fmtTime(t.duration)}`, `t:${t.id}`)];
+    return [btn(`${ICON[t.source] || '🌐'} ${name.slice(0, 44)} · ${fmtTime(t.duration)}`, `t:${t.id}`)];
   });
-  if (withApp) rows.push([await appButton('📱 باز کردن در پلیر')]);
+  if (withApp) rows.push([await appButton('🎵 باز کردن در پلیر')]);
   return kb(rows);
 }
 
+// Every keyboard is one row; the rest lives behind "⋯" (callback mo:<tid>:<where>, back with bk:…).
+// where = c (track card) | a (under a sent audio)
+
 export async function cardKeyboard(tid, liked, isLink = false) {
+  if (isLink) return kb([[btn('🔍 این چه آهنگیه؟', `rec:${tid}`), btn('🎧 صدا', `aq:${tid}:192`), btn('🎬 ویدیو', `v:${tid}`)]]);
+  return kb([[btn('🎧 دانلود آهنگ', `a:${tid}`), btn('🎬 ویدیو', `v:${tid}`), btn('⋯', `mo:${tid}:c`)]]);
+}
+
+/** Under every audio the bot sends: one "edit" button (the editor is in the Mini App) and "⋯". */
+export async function editKeyboard(tid) {
+  return kb([[await appButton('✂️ ویرایش / رینگتون / افکت', `?t=${tid}&edit=1`), btn('⋯', `mo:${tid}:a`)]]);
+}
+
+export async function moreKeyboard(tid, where, liked) {
   return kb([
-    isLink ? [] : [btn('🎧 دریافت آهنگ', `a:${tid}`), btn('🎬 دریافت ویدیو', `v:${tid}`)],
-    isLink ? [] : [btn('🔁 ریمیکس‌ها', `rx:${tid}`), btn(liked ? '❤️ لایک شده' : '🤍 لایک', `lk:${tid}`), btn('➕ پلی‌لیست', `pl:${tid}`)],
-    isLink ? [btn('🔍 این چه آهنگیه؟ (تشخیص)', `rec:${tid}`)] : [],
-    isLink ? [btn('🎧 دانلود صدا', `aq:${tid}:192`), btn('🎬 دانلود ویدیو', `v:${tid}`)] : [],
-    [await appButton('📱 پخش / ویرایش در مینی‌اپ', `?t=${tid}`)],
+    [btn('🔁 ریمیکس‌ها', `rx:${tid}`), btn(liked ? '❤️' : '🤍', `lk:${tid}:${where}`), btn('➕ پلی‌لیست', `pl:${tid}`)],
+    [where === 'a' ? btn('🎬 ویدیو', `v:${tid}`) : btn('🎙 ویس', `vo:${tid}`), await appButton('🎵 پلیر', `?t=${tid}`), btn('🔙', `bk:${tid}:${where}`)],
   ]);
 }
 
 export function audioQualityKeyboard(tid) {
-  return kb([
-    AUDIO_QUALITIES.map((q) => btn(`${q} kbps`, `aq:${tid}:${q}`)),
-    [btn('🎙 به صورت ویس', `vo:${tid}`)],
-  ]);
+  return kb([[...AUDIO_QUALITIES.map((q) => btn(q, `aq:${tid}:${q}`)), btn('🎙 ویس', `vo:${tid}`)]]);
 }
 
 export function videoQualityKeyboard(tid) {
   return kb([VIDEO_QUALITIES.map((h) => btn(`${h}p`, `vq:${tid}:${h}`))]);
-}
-
-// Under every audio the bot sends. Cutting and effects run inside the Mini App (in the browser),
-// because the serverless runtime has no audio processing.
-export async function editKeyboard(tid) {
-  return kb([
-    [await appButton('✂️ برش', `?t=${tid}&edit=cut`), await appButton('🔔 رینگتون', `?t=${tid}&edit=ringtone`)],
-    [await appButton('🐢 اسلو + ریورب', `?t=${tid}&edit=slow`), await appButton('⚡ تند', `?t=${tid}&edit=fast`)],
-    [await appButton('🔊 باس', `?t=${tid}&edit=bass`), await appButton('🎧 8D', `?t=${tid}&edit=8d`), await appButton('🎤 بی‌کلام', `?t=${tid}&edit=karaoke`)],
-    [btn('🔁 ریمیکس‌ها', `rx:${tid}`), btn('🎬 ویدیو', `v:${tid}`), btn('➕ پلی‌لیست', `pl:${tid}`)],
-  ]);
 }
 
 export function playlistPicker(tid, lists) {

@@ -1,11 +1,11 @@
 "use strict";
-// Mini App: player, library, history, live recognition and an in-browser audio editor.
-// The backend is the bot's Telegram Serverless endpoints (tgcloud/endpoints/*), called
-// with Telegram.WebApp.Serverless.call.
+// Kanki Music Mini App: player, library, history, recognition and an in-browser audio editor.
+// Backend: the bot's Telegram Serverless endpoints (tgcloud/endpoints/*) via Telegram.WebApp.Serverless.call.
 const tg = window.Telegram?.WebApp;
 tg?.ready();
 tg?.expand();
-if (tg?.initData) document.documentElement.dataset.tg = "1";
+tg?.setHeaderColor?.("#000000");
+tg?.setBackgroundColor?.("#000000");
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -16,10 +16,14 @@ const fmt = (s) => {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = String(s % 60).padStart(2, "0");
   return h ? `${h}:${String(m).padStart(2, "0")}:${x}` : `${m}:${x}`;
 };
-const PLACEHOLDER = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#8884"/><text x="5" y="6.6" font-size="5" text-anchor="middle">♪</text></svg>');
+const PLACEHOLDER = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#1a1406"/><text x="5" y="6.8" font-size="5" text-anchor="middle" fill="#ffc72c">♪</text></svg>');
 const haptic = (t = "light") => tg?.HapticFeedback?.impactOccurred(t);
+const store = {
+  get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
 
-function toast(msg, ms = 2500) {
+function toast(msg, ms = 2600) {
   const el = $("#toast");
   el.textContent = msg;
   el.hidden = false;
@@ -50,6 +54,28 @@ function bytesToB64(bytes) {
   return btoa(s);
 }
 
+/* ---------------- look ---------------- */
+const THEMES = ["gold", "violet", "cyber", "crimson", "mono"];
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  store.set("theme", t);
+}
+setTheme(store.get("theme", "gold"));
+$("#theme-btn").onclick = () => {
+  const t = THEMES[(THEMES.indexOf(document.documentElement.dataset.theme) + 1) % THEMES.length];
+  setTheme(t);
+  haptic();
+};
+
+// gold fill on the played part of every slider
+function paint(el) {
+  const min = +el.min || 0, max = +el.max || 100;
+  el.style.setProperty("--p", `${((+el.value - min) / (max - min || 1)) * 100}%`);
+}
+document.addEventListener("input", (e) => e.target.type === "range" && paint(e.target));
+const paintAll = () => $$('input[type="range"]').forEach(paint);
+paintAll();
+
 /* ---------------- tabs ---------------- */
 function showView(id) {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === id));
@@ -57,9 +83,10 @@ function showView(id) {
   if (id === "v-library") loadLibrary();
   if (id === "v-history") loadHistory();
 }
-$$(".tabs button").forEach((b) => (b.onclick = () => showView(b.dataset.view)));
+$$(".tabs button").forEach((b) => (b.onclick = () => { haptic(); showView(b.dataset.view); }));
 
 /* ---------------- track lists ---------------- */
+const SRC = { youtube: "YouTube", soundcloud: "SoundCloud", radiojavan: "RadioJavan", saavn: "Saavn" };
 function renderList(el, tracks, { emptyText = "چیزی نیست", onRemove } = {}) {
   if (!tracks.length) {
     el.innerHTML = `<p class="empty">${esc(emptyText)}</p>`;
@@ -70,14 +97,15 @@ function renderList(el, tracks, { emptyText = "چیزی نیست", onRemove } = 
     const row = document.createElement("div");
     row.className = "item" + (player.cur?.id === t.id ? " playing" : "");
     row.innerHTML = `<img loading="lazy" src="${esc(t.thumb || PLACEHOLDER)}" onerror="this.src='${PLACEHOLDER}'">
-      <div class="meta"><b>${esc(t.title)}</b><small>${esc(t.artist || "")}${t.duration ? " · " + fmt(t.duration) : ""}<span class="badge">${esc(t.source || "")}</span></small></div>
-      ${onRemove ? '<button class="icon more" title="حذف">✕</button>' : ""}`;
+      <div class="meta"><b>${esc(t.title)}</b><small>${esc(t.artist || "")}${t.duration ? " · " + fmt(t.duration) : ""}<span class="badge">${esc(SRC[t.source] || t.source || "")}</span></small></div>
+      ${onRemove ? '<button class="icon-btn more" title="حذف">✕</button>' : ""}`;
     row.onclick = (e) => {
       if (e.target.closest(".more")) {
         e.stopPropagation();
         onRemove(t, row);
         return;
       }
+      haptic();
       player.playList(tracks, i);
     };
     el.appendChild(row);
@@ -133,12 +161,108 @@ function loadAudio(t, onProgress) {
   return audioCache.get(t.id);
 }
 
-/* ---------------- player ---------------- */
+/* ---------------- sound engine: volume (to 150%), 3-band EQ, analyser for the visualizer ---------------- */
 const audio = $("#audio");
+const fx = { ctx: null, gain: null, low: null, mid: null, high: null, analyser: null, volume: +store.get("vol", 100) / 100, muted: false };
+function engine() {
+  if (fx.ctx) {
+    if (fx.ctx.state === "suspended") fx.ctx.resume();
+    return fx;
+  }
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaElementSource(audio);
+    const low = ctx.createBiquadFilter(), mid = ctx.createBiquadFilter(), high = ctx.createBiquadFilter();
+    low.type = "lowshelf"; low.frequency.value = 120;
+    mid.type = "peaking"; mid.frequency.value = 1400; mid.Q.value = 0.9;
+    high.type = "highshelf"; high.frequency.value = 6500;
+    const gain = ctx.createGain(), analyser = ctx.createAnalyser();
+    analyser.fftSize = 128;
+    src.connect(low); low.connect(mid); mid.connect(high); high.connect(gain); gain.connect(analyser); analyser.connect(ctx.destination);
+    Object.assign(fx, { ctx, gain, low, mid, high, analyser });
+    applyVolume();
+    applyEq();
+  } catch (e) {
+    console.warn("web audio unavailable", e);
+  }
+  return fx;
+}
+function applyVolume(rampSec = 0) {
+  const v = fx.muted ? 0 : fx.volume;
+  if (fx.gain) {
+    const t = fx.ctx.currentTime;
+    fx.gain.gain.cancelScheduledValues(t);
+    fx.gain.gain.setTargetAtTime(v, t, rampSec || 0.02);
+    audio.volume = 1;
+  } else audio.volume = Math.min(1, v);
+  $("#vol-mute").textContent = v === 0 ? "🔇" : v < 0.5 ? "🔈" : "🔊";
+  $("#vol-val").textContent = Math.round(fx.volume * 100);
+}
+const volEl = $("#vol");
+volEl.value = fx.volume * 100;
+paint(volEl);
+volEl.oninput = () => {
+  fx.volume = +volEl.value / 100;
+  fx.muted = false;
+  store.set("vol", volEl.value);
+  engine();
+  applyVolume();
+};
+$("#vol-mute").onclick = () => { fx.muted = !fx.muted; engine(); applyVolume(); };
+
+const EQ = { flat: [0, 0, 0], bass: [9, 0, -1], vocal: [-2, 5, 2], treble: [-1, 1, 8], party: [7, -2, 5] };
+function applyEq() {
+  if (!fx.low) return;
+  fx.low.gain.value = +$("#eq-low").value;
+  fx.mid.gain.value = +$("#eq-mid").value;
+  fx.high.gain.value = +$("#eq-high").value;
+}
+function setEq(name) {
+  const [l, m, h] = EQ[name] || EQ.flat;
+  $("#eq-low").value = l; $("#eq-mid").value = m; $("#eq-high").value = h;
+  $$("#eq-presets .chip").forEach((c) => c.classList.toggle("on", c.dataset.eq === name));
+  store.set("eq", name);
+  paintAll();
+  engine();
+  applyEq();
+}
+$$("#eq-presets .chip").forEach((c) => (c.onclick = () => setEq(c.dataset.eq)));
+["#eq-low", "#eq-mid", "#eq-high"].forEach((s) => ($(s).oninput = () => {
+  $$("#eq-presets .chip").forEach((c) => c.classList.remove("on"));
+  engine();
+  applyEq();
+}));
+setEq(store.get("eq", "flat"));
+
+// visualizer: gold bars under the cover
+(function viz() {
+  const cv = $("#viz"), g = cv.getContext("2d");
+  const data = new Uint8Array(64);
+  const draw = () => {
+    requestAnimationFrame(draw);
+    if ($("#player").hidden || !fx.analyser) return;
+    fx.analyser.getByteFrequencyData(data);
+    g.clearRect(0, 0, cv.width, cv.height);
+    const color = getComputedStyle(document.documentElement).getPropertyValue("--gold").trim() || "#ffc72c";
+    const n = 40, w = cv.width / n;
+    g.fillStyle = color;
+    g.shadowColor = color;
+    g.shadowBlur = 12;
+    for (let i = 0; i < n; i++) {
+      const v = audio.paused ? 0.04 : data[i + 2] / 255;
+      const h = Math.max(3, v * cv.height);
+      g.globalAlpha = 0.35 + v * 0.65;
+      g.fillRect(i * w + 2, cv.height - h, w - 4, h);
+    }
+  };
+  draw();
+})();
+
+/* ---------------- player ---------------- */
 const player = {
   queue: [], idx: -1, cur: null,
-  repeat: "off", // off | all | one
-  shuffle: false,
+  repeat: store.get("repeat", "off"), // off | all | one
+  shuffle: store.get("shuffle", "0") === "1",
   loadSeq: 0,
 
   playList(tracks, i) {
@@ -158,21 +282,21 @@ const player = {
     setupCut();
     const loading = $("#p-loading");
     loading.hidden = false;
-    loading.textContent = "⏳ در حال آماده‌سازی...";
+    loading.textContent = "⏳";
     try {
       const { url } = await loadAudio(t, (n, total) => {
-        if (seq === this.loadSeq) loading.textContent = `⏳ دریافت ${n} از ${total}`;
+        if (seq === this.loadSeq) loading.textContent = `⏳ ${Math.round((n / total) * 100)}%`;
       });
       if (seq !== this.loadSeq) return;
       audio.src = url;
-      audio.playbackRate = +$("#p-rate").value;
-      if (autoplay) audio.play().catch(() => {});
+      audio.playbackRate = rate;
+      if (autoplay) play();
       call("played", { id: t.id }).catch(() => {});
       preloadNext();
     } catch (e) {
       if (seq !== this.loadSeq) return;
       loading.hidden = true;
-      toast("⚠️ " + e.message, 4000);
+      toast("⚠️ " + e.message, 5000);
     }
   },
   render() {
@@ -180,13 +304,15 @@ const player = {
     if (!t) return;
     $("#mini").hidden = false;
     $("#mini-cover").src = $("#p-cover").src = t.thumb || PLACEHOLDER;
+    $("#mini-cover").onerror = $("#p-cover").onerror = (e) => (e.target.src = PLACEHOLDER);
     $("#mini-title").textContent = $("#p-title").textContent = t.title;
     $("#mini-artist").textContent = $("#p-artist").textContent = t.artist || "";
-    $("#player-src").textContent = `${this.idx + 1} / ${this.queue.length} · ${t.source || ""}`;
+    $("#player-src").textContent = `${this.idx + 1} / ${this.queue.length} · ${SRC[t.source] || t.source || ""}`;
     $("#p-like").textContent = t.liked ? "❤️" : "🤍";
     $("#p-shuffle").classList.toggle("active", this.shuffle);
     $("#p-repeat").classList.toggle("active", this.repeat !== "off");
     $("#p-repeat").textContent = this.repeat === "one" ? "🔂" : "🔁";
+    $$(".item").forEach((el) => el.classList.remove("playing"));
     if ("mediaSession" in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: t.title, artist: t.artist || "", artwork: t.thumb ? [{ src: t.thumb, sizes: "480x360" }] : [],
@@ -218,9 +344,18 @@ const player = {
   },
   toggle() {
     if (!this.cur || !audio.src) return;
-    audio.paused ? audio.play() : audio.pause();
+    audio.paused ? play() : audio.pause();
   },
 };
+
+function play() {
+  engine();
+  if ($("#crossfade").checked && fx.gain) {
+    fx.gain.gain.setValueAtTime(0, fx.ctx.currentTime);
+    applyVolume(0.6);
+  }
+  audio.play().catch(() => {});
+}
 
 // fetch the next track in the background so skipping is instant
 function preloadNext() {
@@ -228,6 +363,24 @@ function preloadNext() {
   const t = player.queue[player.idx + 1];
   if (t) loadAudio(t).catch(() => {});
 }
+
+let rate = 1;
+$$("#rate-chips .chip").forEach((c) => (c.onclick = () => {
+  rate = +c.dataset.rate;
+  audio.playbackRate = rate;
+  $$("#rate-chips .chip").forEach((x) => x.classList.toggle("on", x === c));
+}));
+
+// sleep timer
+let sleepTimer = null, sleepAtEnd = false;
+$$("#sleep-chips .chip").forEach((c) => (c.onclick = () => {
+  clearTimeout(sleepTimer);
+  sleepAtEnd = c.dataset.sleep === "end";
+  const min = +c.dataset.sleep || 0;
+  if (min) sleepTimer = setTimeout(() => { audio.pause(); toast("😴 تایمر خواب: پخش متوقف شد"); }, min * 60000);
+  $$("#sleep-chips .chip").forEach((x) => x.classList.toggle("on", x === c));
+  if (min || sleepAtEnd) toast(sleepAtEnd ? "😴 بعد از همین آهنگ متوقف میشه" : `😴 ${min} دقیقه دیگه متوقف میشه`);
+}));
 
 audio.addEventListener("play", () => ($("#p-play").textContent = $("#mini-play").textContent = "⏸"));
 audio.addEventListener("pause", () => ($("#p-play").textContent = $("#mini-play").textContent = "▶"));
@@ -238,15 +391,29 @@ audio.addEventListener("loadedmetadata", () => {
 });
 audio.addEventListener("timeupdate", () => {
   const d = audio.duration || 0, c = audio.currentTime;
-  if (!seeking) $("#seek").value = d ? (c / d) * 1000 : 0;
+  if (!seeking) {
+    $("#seek").value = d ? (c / d) * 1000 : 0;
+    paint($("#seek"));
+  }
   $("#t-cur").textContent = fmt(c);
   $("#mini-bar").style.width = d ? `${(c / d) * 100}%` : "0";
   if (d && !preview) $("#cut-head").style.left = `${(c / d) * 100}%`;
+  // crossfade: fade out the last 3 s
+  if ($("#crossfade").checked && fx.gain && d && d - c < 3 && !fx.fading) {
+    fx.fading = true;
+    fx.gain.gain.setTargetAtTime(0, fx.ctx.currentTime, 0.8);
+  }
 });
 audio.addEventListener("ended", () => {
+  fx.fading = false;
+  if (sleepAtEnd) {
+    sleepAtEnd = false;
+    $$("#sleep-chips .chip").forEach((x, i) => x.classList.toggle("on", i === 0));
+    return;
+  }
   if (player.repeat === "one") {
     audio.currentTime = 0;
-    audio.play();
+    play();
   } else player.next(false);
 });
 
@@ -262,24 +429,26 @@ $("#seek").addEventListener("change", () => {
 
 $("#p-play").onclick = $("#mini-play").onclick = (e) => {
   e.stopPropagation();
-  haptic();
+  haptic("medium");
   player.toggle();
 };
 $("#p-next").onclick = $("#mini-next").onclick = (e) => {
   e.stopPropagation();
+  haptic();
   player.next();
 };
-$("#p-prev").onclick = () => player.prev();
+$("#p-prev").onclick = () => { haptic(); player.prev(); };
 $("#p-back10").onclick = () => (audio.currentTime = Math.max(0, audio.currentTime - 10));
 $("#p-fwd10").onclick = () => (audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 10));
-$("#p-rate").onchange = () => (audio.playbackRate = +$("#p-rate").value);
 $("#p-shuffle").onclick = () => {
   player.shuffle = !player.shuffle;
+  store.set("shuffle", player.shuffle ? "1" : "0");
   toast(player.shuffle ? "🔀 پخش تصادفی روشن" : "پخش تصادفی خاموش");
   player.render();
 };
 $("#p-repeat").onclick = () => {
   player.repeat = { off: "all", all: "one", one: "off" }[player.repeat];
+  store.set("repeat", player.repeat);
   toast({ off: "تکرار خاموش", all: "🔁 تکرار همه", one: "🔂 تکرار همین آهنگ" }[player.repeat]);
   player.render();
 };
@@ -294,7 +463,7 @@ $("#p-like").onclick = async () => {
 };
 
 if ("mediaSession" in navigator) {
-  navigator.mediaSession.setActionHandler("play", () => audio.play());
+  navigator.mediaSession.setActionHandler("play", () => play());
   navigator.mediaSession.setActionHandler("pause", () => audio.pause());
   navigator.mediaSession.setActionHandler("nexttrack", () => player.next());
   navigator.mediaSession.setActionHandler("previoustrack", () => player.prev());
@@ -307,7 +476,7 @@ if ("mediaSession" in navigator) {
   let x0 = null;
   el.addEventListener("touchstart", (e) => (x0 = e.touches[0].clientX), { passive: true });
   el.addEventListener("touchmove", (e) => {
-    if (x0 !== null) $("#p-cover").style.transform = `translateX(${(e.touches[0].clientX - x0) / 3}px)`;
+    if (x0 !== null) $("#p-cover").style.transform = `translateX(${(e.touches[0].clientX - x0) / 3}px) rotate(${(e.touches[0].clientX - x0) / 40}deg)`;
   }, { passive: true });
   el.addEventListener("touchend", (e) => {
     const dx = e.changedTouches[0].clientX - x0;
@@ -322,6 +491,7 @@ if ("mediaSession" in navigator) {
 function openPlayer() {
   $("#player").hidden = false;
   tg?.BackButton?.show();
+  paintAll();
 }
 function closePlayer() {
   $("#player").hidden = true;
@@ -340,8 +510,10 @@ function togglePanel(name, force) {
     const show = p.id === `panel-${name}` && (force ?? p.hidden);
     p.hidden = !show;
   });
+  $$(".tool[data-panel]").forEach((b) => b.classList.toggle("on", !$(`#panel-${b.dataset.panel}`).hidden));
   if (name === "queue") renderQueue();
   if (name === "edit") setupCut();
+  paintAll();
   if (!$(`#panel-${name}`).hidden) setTimeout(() => $(`#panel-${name}`).scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
 }
 $$("[data-panel]").forEach((b) => (b.onclick = () => togglePanel(b.dataset.panel)));
@@ -353,8 +525,8 @@ function renderQueue() {
 }
 
 /* send to chat */
-["128", "192", "320"].forEach((q) => $("#send-audio").insertAdjacentHTML("beforeend", `<button class="btn" data-send="audio:${q}">${q} kbps</button>`));
-["360", "480", "720", "1080"].forEach((q) => $("#send-video").insertAdjacentHTML("beforeend", `<button class="btn" data-send="video:${q}">${q}p</button>`));
+["128", "192", "320"].forEach((q) => $("#send-audio").insertAdjacentHTML("beforeend", `<button class="pill" data-send="audio:${q}">${q} kbps</button>`));
+["360", "480", "720", "1080"].forEach((q) => $("#send-video").insertAdjacentHTML("beforeend", `<button class="pill" data-send="video:${q}">${q}p</button>`));
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-send]");
   if (!b || !player.cur) return;
@@ -366,7 +538,7 @@ document.addEventListener("click", async (e) => {
     toast("✅ تو چت ربات فرستادم");
     haptic("medium");
   } catch (err) {
-    toast("⚠️ " + err.message, 4000);
+    toast("⚠️ " + err.message, 5000);
   } finally {
     b.disabled = false;
   }
@@ -424,7 +596,8 @@ function setupCut() {
   const d = trackDur();
   if (!d) return;
   ["#cut-a", "#cut-b"].forEach((s) => ($(s).max = d.toFixed(1)));
-  if (cut.track !== player.cur?.id) {
+  // (re)start from the 30 s around the chorus for a new track, or once the real length is known
+  if (cut.track !== player.cur?.id || cut.b > d + 0.5) {
     cut.track = player.cur?.id;
     cut.a = Math.max(0, d * 0.4 - 15);
     cut.b = Math.min(d, cut.a + 30);
@@ -437,6 +610,8 @@ function drawCut() {
   cut.b = Math.max(cut.a + 1, Math.min(cut.b, d));
   $("#cut-a").value = cut.a;
   $("#cut-b").value = cut.b;
+  paint($("#cut-a"));
+  paint($("#cut-b"));
   $("#cut-a-t").textContent = fmt(cut.a);
   $("#cut-b-t").textContent = fmt(cut.b);
   $("#cut-len").textContent = `${Math.round(cut.b - cut.a)}s`;
@@ -459,7 +634,13 @@ $$("[data-mark]").forEach((b) => (b.onclick = () => {
   restartPreview();
 }));
 $("#cut-whole").onclick = () => { cut.a = 0; cut.b = trackDur(); drawCut(); restartPreview(); };
-$("#cut-ring").onclick = () => { const d = trackDur(); cut.a = Math.max(0, d * 0.4 - 15); cut.b = Math.min(d, cut.a + 30); drawCut(); restartPreview(); };
+function ringtoneRange() {
+  const d = trackDur();
+  cut.a = Math.max(0, d * 0.4 - 15);
+  cut.b = Math.min(d, cut.a + 30);
+  $("#cut-fade").checked = true;
+  drawCut();
+}
 $("#cut-bar").onclick = (e) => {
   const r = e.currentTarget.getBoundingClientRect();
   const t = ((e.clientX - r.left) / r.width) * trackDur();
@@ -467,6 +648,13 @@ $("#cut-bar").onclick = (e) => {
   drawCut();
   restartPreview();
 };
+function setEditMode(mode) {
+  $$("#edit-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  $("#fx-chips").hidden = mode !== "fx";
+  if (mode === "ringtone") ringtoneRange();
+  restartPreview();
+}
+$$("#edit-mode button").forEach((b) => (b.onclick = () => setEditMode(b.dataset.mode)));
 $$("#fx-chips .chip").forEach((c) => (c.onclick = () => {
   cut.fx = c.dataset.fx;
   $$("#fx-chips .chip").forEach((x) => x.classList.toggle("on", x === c));
@@ -567,7 +755,7 @@ function stopPreview() {
   try { preview.src.stop(); } catch {}
   preview.ctx.close();
   preview = null;
-  $("#cut-preview").textContent = "▶ گوش دادن زنده";
+  $("#cut-preview").textContent = "▶ گوش دادن";
 }
 async function startPreview() {
   const buffer = await getBuffer();
@@ -647,9 +835,10 @@ $("#cut-send").onclick = async () => {
   }
 };
 
-/* ---------------- listen (recognition) ---------------- */
-// Shazam fingerprints are computed here, in the browser (WebAssembly can't run on the bot's
-// serverless backend); the "shazam" endpoint only asks Shazam's API what the fingerprint is.
+/* ---------------- listen (recognition) ----------------
+   1. Shazam: fingerprint made here in the browser (shazamio-core), looked up by the "shazam" endpoint
+   2. the bot's paid engines if the admin set them (AudD, ACRCloud, humming, Whisper)
+   3. "I'll sing" mode: the phone's own speech recognition turns the sung words into text -> search */
 const SHAZAMIO = "https://cdn.jsdelivr.net/npm/shazamio-core@1.3.1/web/";
 let shazamLib = null;
 function shazamCore() {
@@ -661,15 +850,6 @@ function shazamCore() {
   return shazamLib;
 }
 
-async function decodeBlob(blob) {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  try {
-    return await ctx.decodeAudioData(await blob.arrayBuffer());
-  } finally {
-    ctx.close();
-  }
-}
-
 function monoSlice(buf, start, secs) {
   const from = Math.floor(start * buf.sampleRate);
   const len = Math.min(buf.length - from, Math.floor(secs * buf.sampleRate));
@@ -679,6 +859,15 @@ function monoSlice(buf, start, secs) {
     for (let i = 0; i < out.length; i++) out[i] += d[from + i] / buf.numberOfChannels;
   }
   return out;
+}
+
+async function decodeBlob(blob) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  try {
+    return await ctx.decodeAudioData(await blob.arrayBuffer());
+  } finally {
+    ctx.close();
+  }
 }
 
 /** Shazam on a recording / file: a few 12 s windows until one matches. -> endpoint result or null */
@@ -696,19 +885,22 @@ async function shazamBlob(blob) {
   return null;
 }
 
-function showRecognition(r, el) {
+let engines = null;
+const getEngines = () => (engines ??= call("engines").catch(() => ({ fingerprint: false, humming: false })));
+
+function showRecognition(r, el, note = "") {
   if (r.match) {
     const m = r.match;
-    el.innerHTML = `<div class="match"><img src="${esc(m.cover || r.tracks[0]?.thumb || PLACEHOLDER)}"><div>
+    el.innerHTML = `<div class="match glass"><img src="${esc(m.cover || r.tracks[0]?.thumb || PLACEHOLDER)}"><div>
       <h3>${esc(m.title)}</h3><p class="muted">${esc(m.artist || "")}${m.album ? " · " + esc(m.album) : ""}</p><small>با ${esc(m.engine)}</small></div></div>`;
     haptic("heavy");
     $("#listen-status").textContent = "✅ پیدا شد!";
   } else if (r.transcript) {
-    el.innerHTML = `<div class="match"><div><b>📝 چیزی که شنیدم:</b><p>«${esc(r.transcript)}»</p>
-      ${r.lyricHits.length ? "<small>آهنگ‌هایی با این متن: " + r.lyricHits.map(esc).join("، ") + "</small>" : ""}</div></div>`;
-    $("#listen-status").textContent = "با متنی که خوندی گشتم 👇";
+    el.innerHTML = `<div class="match glass"><div><b>📝 چیزی که شنیدم:</b><p>«${esc(r.transcript)}»</p>
+      ${r.lyricHits?.length ? "<small>آهنگ‌هایی با این متن: " + r.lyricHits.map(esc).join("، ") + "</small>" : ""}</div></div>`;
+    $("#listen-status").textContent = "با کلمه‌هایی که خوندی گشتم 👇";
   } else {
-    $("#listen-status").textContent = "😕 پیدا نشد؛ نزدیک‌تر یا با صدای واضح‌تر امتحان کن، یا یه تیکه از متن آهنگ رو جستجو کن";
+    $("#listen-status").textContent = note || "😕 پیدا نشد؛ صدای واضح‌تر و نزدیک‌تر امتحان کن، یا یه تیکه از متن آهنگ رو جستجو کن";
   }
   const list = document.createElement("div");
   list.className = "list";
@@ -716,37 +908,50 @@ function showRecognition(r, el) {
   if (r.tracks?.length) renderList(list, r.tracks);
 }
 
-let recorder = null;
-async function recognizeBlob(blob) {
+let listenMode = "song";
+$$("#listen-mode button").forEach((b) => (b.onclick = () => {
+  listenMode = b.dataset.mode;
+  $$("#listen-mode button").forEach((x) => x.classList.toggle("on", x === b));
+  $("#sing-lang").hidden = listenMode !== "sing";
+  $("#listen-status").textContent = listenMode === "sing"
+    ? "بزن و چند خط از آهنگ رو بخون (کلمه‌ها مهمن)"
+    : "بزن و گوشی رو نزدیک صدای آهنگ بگیر";
+}));
+$("#sing-lang").value = store.get("singLang", navigator.language?.startsWith("tr") ? "tr-TR" : "fa-IR");
+$("#sing-lang").onchange = () => store.set("singLang", $("#sing-lang").value);
+
+async function recognizeBlob(blob, spoken = "") {
   const el = $("#listen-result");
   el.innerHTML = "";
-  const hum = $("#hum").checked;
+  const sing = listenMode === "sing";
   try {
-    if (!hum) {
-      $("#listen-status").textContent = "🔍 دارم با Shazam پیدا می‌کنم...";
-      const r = await shazamBlob(blob).catch((e) => (console.warn("shazam", e), null));
-      if (r) return showRecognition(r, el);
+    $("#listen-status").textContent = "🔍 دارم با Shazam پیدا می‌کنم...";
+    const r = await shazamBlob(blob).catch((e) => (console.warn("shazam", e), null));
+    if (r) return showRecognition(r, el);
+
+    const eng = await getEngines();
+    if ((sing ? eng.humming : eng.fingerprint) && blob.size < 6 * 1024 * 1024) {
+      $("#listen-status").textContent = "🔍 دارم بیشتر می‌گردم...";
+      const r2 = await call("recognize", { data: bytesToB64(new Uint8Array(await blob.arrayBuffer())), mime: blob.type || "audio/webm", hum: sing });
+      if (r2.match || r2.transcript) return showRecognition(r2, el);
     }
-    // humming / singing, or Shazam didn't know it: the bot's other engines (AudD, ACRCloud, Whisper)
-    if (blob.size > 6 * 1024 * 1024) throw new Error("پیدا نشد؛ یه تیکه کوتاه‌تر (زیر ۶ مگ) امتحان کن");
-    $("#listen-status").textContent = hum ? "🎤 دارم به صدات گوش می‌دم..." : "🔍 دارم بیشتر می‌گردم...";
-    const r = await call("recognize", {
-      data: bytesToB64(new Uint8Array(await blob.arrayBuffer())),
-      mime: blob.type || "audio/webm",
-      hum,
-    });
-    if (!r.match && !r.transcript && !r.configured && hum) {
-      $("#listen-status").textContent = "⚠️ تشخیص زمزمه هنوز تنظیم نشده (ادمین باید کلید ACRCloud یا Whisper رو وارد کنه)";
-      return;
+    if (spoken) {
+      $("#listen-status").textContent = "🔍 دارم با کلمه‌هایی که خوندی می‌گردم...";
+      const tracks = await call("search", { q: spoken });
+      return showRecognition({ transcript: spoken, tracks }, el);
     }
-    showRecognition(r, el);
+    showRecognition({}, el, sing
+      ? "😕 پیدا نشد. کلمه‌های آهنگ رو واضح‌تر بخون، یا متنش رو تو جستجو بنویس"
+      : "😕 پیدا نشد؛ صدای واضح‌تر و نزدیک‌تر (۱۰ تا ۱۵ ثانیه) امتحان کن");
   } catch (e) {
     $("#listen-status").textContent = "⚠️ " + e.message;
   }
 }
 
+let recorder = null;
 $("#listen-btn").onclick = async () => {
   if (recorder?.state === "recording") return recorder.stop();
+  shazamCore().catch(() => {}); // warm up while recording
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
@@ -757,11 +962,26 @@ $("#listen-btn").onclick = async () => {
   const wasPlaying = !audio.paused;
   audio.pause();
   stopPreview();
+  const sing = listenMode === "sing";
+  // words of the song, from the phone's own speech recognition (free; Chrome/Android)
+  let spoken = "";
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let sr = null;
+  if (sing && SR) {
+    try {
+      sr = new SR();
+      sr.lang = $("#sing-lang").value;
+      sr.continuous = true;
+      sr.interimResults = false;
+      sr.onresult = (e) => { spoken = [...e.results].map((x) => x[0].transcript).join(" ").trim(); };
+      sr.onerror = () => {};
+      sr.start();
+    } catch { sr = null; }
+  }
   const chunks = [];
   recorder = new MediaRecorder(stream);
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  const secs = $("#hum").checked ? 15 : 12;
-  let left = secs;
+  let left = sing ? 15 : 12;
   const timer = setInterval(() => {
     left -= 1;
     $("#listen-label").innerHTML = `${left}<br>ثانیه`;
@@ -770,15 +990,17 @@ $("#listen-btn").onclick = async () => {
   recorder.onstop = () => {
     stream.getTracks().forEach((t) => t.stop());
     clearInterval(timer);
+    try { sr?.stop(); } catch {}
     $("#listen-btn").classList.remove("rec");
     $("#listen-label").innerHTML = "🎧<br>گوش بده";
-    recognizeBlob(new Blob(chunks, { type: recorder.mimeType }));
-    if (wasPlaying) audio.play();
+    // speech results arrive a moment after stop
+    setTimeout(() => recognizeBlob(new Blob(chunks, { type: recorder.mimeType }), spoken), sr ? 700 : 0);
+    if (wasPlaying) play();
   };
   recorder.start();
   haptic("medium");
   $("#listen-btn").classList.add("rec");
-  $("#listen-status").textContent = $("#hum").checked ? "🎤 بخون یا زمزمه کن..." : "👂 دارم گوش می‌دم...";
+  $("#listen-status").textContent = sing ? "🎤 بخون..." : "👂 دارم گوش می‌دم...";
   $("#listen-label").innerHTML = `${left}<br>ثانیه`;
 };
 $("#listen-file").onchange = (e) => {
@@ -798,9 +1020,9 @@ async function loadLibrary() {
     return;
   }
   const cards = [
-    `<div class="card smart" data-open="smart"><span class="ico">🌟</span><div><b>منتخب تو</b><br><small>${libCache.smart.length} آهنگ · خودکار از چیزایی که بیشتر گوش دادی، دانلود و لایک کردی</small></div></div>`,
-    `<div class="card" data-open="liked"><span class="ico">❤️</span><div><b>لایک‌ها</b><br><small>${libCache.liked.length} آهنگ</small></div></div>`,
-    ...libCache.playlists.map((p) => `<div class="card" data-open="${p.id}"><span class="ico">📁</span><div><b>${esc(p.name)}</b><br><small>${p.count} آهنگ</small></div></div>`),
+    `<div class="card glass smart" data-open="smart"><span class="ico">🌟</span><div><b>منتخب تو</b><br><small>${libCache.smart.length} آهنگ · خودکار از چیزایی که بیشتر گوش دادی، دانلود و لایک کردی</small></div></div>`,
+    `<div class="card glass" data-open="liked"><span class="ico">❤️</span><div><b>لایک‌ها</b><br><small>${libCache.liked.length} آهنگ</small></div></div>`,
+    ...libCache.playlists.map((p) => `<div class="card glass" data-open="${p.id}"><span class="ico">📁</span><div><b>${esc(p.name)}</b><br><small>${p.count} آهنگ</small></div></div>`),
   ];
   $("#lib-cards").innerHTML = cards.join("");
   $$("#lib-cards [data-open]").forEach((c) => (c.onclick = () => openCollection(c.dataset.open)));
@@ -921,9 +1143,9 @@ $("#hist-clear").onclick = async () => {
 };
 
 /* ---------------- deep links from the chat ----------------
-   ?rec=1                       recognize the voice/video just sent in the chat
-   ?t=ID&shazam=1               recognize the song of a track/link
-   ?t=ID&edit=cut|ringtone|slow|...&a=&b=   open the editor */
+   ?rec=1                         recognize the voice/video just sent in the chat
+   ?t=ID&shazam=1                 recognize the song of a track/link
+   ?t=ID&edit=1 (or cut|ringtone|slow|fast|bass|8d|karaoke|loud) [&a=&b=]   open the editor */
 (async () => {
   const p = new URLSearchParams(location.search);
   const tid = p.get("t");
@@ -951,19 +1173,19 @@ $("#hist-clear").onclick = async () => {
     const edit = p.get("edit");
     if (!edit) return;
     togglePanel("edit", true);
-    if (edit !== "cut" && edit !== "ringtone") $(`#fx-chips [data-fx="${edit}"]`)?.click();
-    if (edit === "ringtone") cut.track = null; // default selection is the 30 s ringtone part
+    const fxName = ["slow", "fast", "bass", "8d", "karaoke", "loud"].includes(edit) ? edit : "";
+    if (edit === "ringtone") setEditMode("ringtone");
+    else if (fxName) {
+      setEditMode("fx");
+      $(`#fx-chips [data-fx="${fxName}"]`)?.click();
+    }
     const a = parseFloat(p.get("a")), b = parseFloat(p.get("b"));
     if (isFinite(a) && isFinite(b)) {
       cut.track = t.id;
       cut.a = a;
       cut.b = b;
-    } else if (edit !== "ringtone" && edit !== "cut") {
-      cut.track = t.id;
-      cut.a = 0;
-      cut.b = t.duration || 600;
+      drawCut();
     }
-    drawCut();
   } catch (e) {
     toast(e.message);
   }

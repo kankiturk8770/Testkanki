@@ -31,6 +31,7 @@ export async function sendAudio(chatId, track, kbps = '192', { silent = false, m
     title: track.title,
     performer: track.artist || undefined,
     duration: track.duration || undefined,
+    ...(file.alt ? { caption: `ℹ️ نسخه‌ی ${track.source} قابل دانلود نبود؛ این نسخه از ${file.alt.source} فرستاده شد:\n${[file.alt.artist, file.alt.title].filter(Boolean).join(' - ')}` } : {}),
   });
   const audio = msg.audio || msg.document;
   if (audio) await cacheFile(track.id, variant, audio.file_id, file.bytes.length);

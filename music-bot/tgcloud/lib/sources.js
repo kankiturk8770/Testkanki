@@ -1,17 +1,21 @@
 // Finding and downloading music with plain HTTP (the platform has no yt-dlp / ffmpeg).
 //
-//   search:   YouTube (InnerTube, no key) + SoundCloud (public web client id)
+//   search:   YouTube (InnerTube, no key) + RadioJavan + SoundCloud (public web client id)
 //   audio:    SoundCloud — native, HLS segments joined into an .m4a (AAC 160k)
+//             RadioJavan — native, 256k mp3;  JioSaavn (only as a stand-in) — up to 320k AAC
 //             YouTube    — 1) "cobalt" download service if configured (any quality, mp3)
-//                          2) native InnerTube app clients (m4a 128k), 3) the same song on SoundCloud
+//                          2) native InnerTube app clients (m4a 128k), 3) the same song on SoundCloud / RadioJavan / JioSaavn
 //   video:    cobalt if configured, else native: HD video + m4a joined by lib/mp4mux.js (no re-encode)
 //   links:    Instagram / TikTok / … through cobalt
 import { fetch } from 'sdk';
 import { getSetting, setSetting } from './store.js';
-import { concatBytes, readBytes } from './util.js';
+import { concatBytes, readBytes, fromBase64 } from './util.js';
 import { muxAV } from './mp4mux.js';
+import { desDecrypt } from './des.js';
 
 export const AUDIO_QUALITIES = ['128', '192', '320'];
+/** Sources the bot can search and download itself; anything else is a pasted link. */
+export const MUSIC_SOURCES = ['youtube', 'soundcloud', 'radiojavan', 'saavn'];
 export const VIDEO_QUALITIES = ['360', '480', '720', '1080'];
 const MAX_DURATION = 20 * 60;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
@@ -188,7 +192,7 @@ function scToTrack(t) {
   };
 }
 
-async function scSearch(query, limit) {
+export async function scSearch(query, limit) {
   const j = await scApi(`/search/tracks?q=${encodeURIComponent(query)}&limit=${limit + 6}`);
   return (j.collection || [])
     .filter((t) => t.policy !== 'BLOCK' && t.policy !== 'SNIP' && t.duration / 1000 <= MAX_DURATION)
@@ -225,6 +229,59 @@ async function scAudio(track) {
   return { bytes: concatBytes(parts), ext: mp3 ? 'mp3' : 'm4a', mime: mp3 ? 'audio/mpeg' : 'audio/mp4' };
 }
 
+// ---------------- RadioJavan (Persian music; full 256k mp3) ----------------
+
+export async function rjSearch(query, limit) {
+  const res = await fetch(`https://play.radiojavan.com/api/p/search?query=${encodeURIComponent(query)}`, { headers: { 'User-Agent': UA, Accept: 'application/json' } });
+  if (!res.ok) return [];
+  const j = await res.json();
+  return (j.mp3s || []).filter((m) => m.link && (!m.duration || m.duration <= MAX_DURATION)).slice(0, limit).map((m) => ({
+    key: `radiojavan:${m.id}`, source: 'radiojavan', url: m.share_link || `https://play.radiojavan.com/song/${m.permlink}`,
+    title: m.song || splitTitle(m.title).title, artist: m.artist || null,
+    duration: m.duration ? Math.round(m.duration) : null, thumb: m.photo || m.thumbnail || null, media: m.hq_link || m.link,
+  }));
+}
+
+async function rjAudio(track) {
+  let media = track.media;
+  if (!media) {
+    const id = track.key.split(':')[1];
+    const hit = (await rjSearch(`${track.artist || ''} ${track.title}`.trim(), 10)).find((t) => t.key === `radiojavan:${id}`);
+    media = hit?.media;
+  }
+  if (!media) throw new Error('radiojavan: link not found');
+  const res = await fetch(media, { headers: { 'User-Agent': UA } });
+  if (!res.ok) throw new Error(`radiojavan ${res.status}`);
+  return { bytes: await readBytes(res), ext: 'mp3', mime: 'audio/mpeg' };
+}
+
+// ---------------- JioSaavn (big international catalogue; up to 320k AAC) ----------------
+
+export async function saavnSearch(query, limit) {
+  const url = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&api_version=4&ctx=web6dot0&n=${limit + 4}&p=1&q=${encodeURIComponent(query)}`;
+  const res = await fetch(url, { headers: { 'User-Agent': UA } });
+  if (!res.ok) return [];
+  const j = await res.json();
+  const clean = (x) => String(x || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#039;/g, "'");
+  return (j.results || []).filter((r) => r.more_info?.encrypted_media_url && !/karaoke|instrumental/i.test(r.title + r.subtitle)).slice(0, limit).map((r) => ({
+    key: `saavn:${r.id}`, source: 'saavn', url: r.perma_url, title: clean(r.title),
+    artist: clean(r.more_info?.artistMap?.primary_artists?.map((a) => a.name).join(', ') || r.more_info?.music || r.subtitle?.split(' - ')[0]),
+    duration: Number(r.more_info?.duration) || null, thumb: (r.image || '').replace('150x150', '500x500') || null,
+    media: r.more_info.encrypted_media_url, hq: r.more_info['320kbps'] === 'true',
+  }));
+}
+
+async function saavnAudio(track, kbps) {
+  if (!track.media) throw new Error('saavn: link not found');
+  const url = new TextDecoder().decode(desDecrypt(fromBase64(track.media), '38346591'));
+  const q = kbps === '320' && track.hq ? '320' : kbps === '128' ? '96' : '160';
+  for (const u of [url.replace(/_96\.mp4$/, `_${q}.mp4`), url]) {
+    const res = await fetch(u, { headers: { 'User-Agent': UA } });
+    if (res.ok) return { bytes: await readBytes(res), ext: 'm4a', mime: 'audio/mp4' };
+  }
+  throw new Error('saavn: download failed');
+}
+
 // ---------------- cobalt (optional download service) ----------------
 // Any instance of https://github.com/imputnet/cobalt: set it with
 //   /set cobalt_url https://your-instance.example   and optionally   /set cobalt_key <api key>
@@ -247,39 +304,76 @@ async function cobalt(url, opts) {
 
 // ---------------- public API ----------------
 
+const safeList = (name, p) => p.catch((e) => (console.warn(`${name} search`, e.message), []));
+
 export async function search(query, limit = 12) {
-  const per = Math.ceil(limit / 2) + 2;
-  const [yt, sc] = await Promise.all([
-    ytSearch(query, per).catch((e) => (console.warn('yt search', e.message), [])),
-    scSearch(query, per).catch((e) => (console.warn('sc search', e.message), [])),
+  const per = Math.ceil(limit / 3) + 2;
+  const [yt, rj, sc] = await Promise.all([
+    safeList('yt', ytSearch(query, per)), safeList('rj', rjSearch(query, per)), safeList('sc', scSearch(query, per)),
   ]);
   const out = [];
-  for (let i = 0; i < Math.max(yt.length, sc.length); i++) {
-    if (yt[i]) out.push(yt[i]);
-    if (sc[i]) out.push(sc[i]);
+  for (let i = 0; i < Math.max(yt.length, rj.length, sc.length); i++) {
+    for (const list of [rj, yt, sc]) if (list[i]) out.push(list[i]);
   }
   return out.slice(0, limit);
 }
 
 export async function remixes(track, limit = 12) {
-  const base = `${track.artist || ''} ${track.title}`.trim();
+  const base = `${track.artist || ''} ${cleanTitle(track.title)}`.trim();
   const found = (await search(`${base} remix`, limit + 4)).filter((r) => r.key !== track.key);
   const words = ['remix', 'ریمیکس', 'mix', 'edit', 'bootleg', 'cover', 'slowed', 'sped', 'lofi', 'live'];
   const good = found.filter((r) => words.some((w) => `${r.title} ${r.artist || ''}`.toLowerCase().includes(w)));
   return (good.length ? good : found).slice(0, limit);
 }
 
-// Same song from another source, closest length first (for blocked / DRM uploads).
-async function alternatives(track) {
-  const found = (await search(`${track.artist || ''} ${track.title}`.trim(), 8)).filter((f) => f.key !== track.key);
-  const close = track.duration ? found.filter((f) => f.duration && Math.abs(f.duration - track.duration) <= 15) : found;
-  // another source first: if one YouTube upload is blocked, the others usually are too
-  const pool = close.length ? close : found;
-  return [...pool.filter((f) => f.source !== track.source), ...pool.filter((f) => f.source === track.source)].slice(0, 3);
+// "KUSURA BAKMA ( Nefes Pro Remix ) Senden Geçemiyorum…" -> "KUSURA BAKMA"
+function cleanTitle(t) {
+  t = String(t || '');
+  const head = t.split(/[(\[{|•]|\s[–—-]\s|\s(?:ft\.?|feat\.?)\s/i)[0].trim();
+  return (head || t.replace(/[(\[{][^)\]}]*[)\]}]/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
+const words = (s) => new Set(String(s || '').toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length > 1));
+
+function similarity(a, b) {
+  const A = words(a), B = words(b);
+  if (!A.size || !B.size) return 0;
+  let hit = 0;
+  for (const w of A) if (B.has(w)) hit++;
+  return hit / Math.min(A.size, B.size);
+}
+
+/** The same song on sources that serve full files (for YouTube / DRM / deleted uploads), best first. */
+export async function alternatives(track) {
+  const title = cleanTitle(track.title);
+  const remix = /remix|ریمیکس|mix\b/i.test(track.title) ? (track.title.match(/[(\[]([^)\]]*remix[^)\]]*)[)\]]/i)?.[1] || 'remix') : '';
+  const queries = [...new Set([`${track.artist || ''} ${title} ${remix}`.trim(), `${track.artist || ''} ${title}`.trim(), title])];
+  const found = (await Promise.all(queries.map((q) => Promise.all([
+    safeList('sc', scSearch(q, 6)), safeList('rj', rjSearch(q, 4)), safeList('saavn', saavnSearch(q, 4)),
+  ])))).flat(2);
+  // Same core title required. Then: the same remix > the original by the same artist > another version.
+  const remixName = [...words(remix)].filter((w) => !['remix', 'mix', 'ریمیکس'].includes(w));
+  const isRemix = (t) => /remix|ریمیکس|\bmix\b|edit|cover|bootleg/i.test(t);
+  const scored = [];
+  const seen = new Set();
+  for (const f of found) {
+    if (f.key === track.key || seen.has(f.key)) continue;
+    seen.add(f.key);
+    if (similarity(title, cleanTitle(f.title)) < 0.6) continue;
+    const fw = words(`${f.artist || ''} ${f.title}`);
+    let score = similarity(track.artist, f.artist) >= 0.5 ? 2 : 0;
+    if (remixName.length && remixName.every((w) => fw.has(w))) score += 4;
+    else if (isRemix(f.title)) score -= remix ? 1 : 3;
+    if (track.duration && f.duration) score += Math.abs(f.duration - track.duration) <= 15 ? 1 : 0;
+    scored.push({ f, score });
+  }
+  return scored.sort((a, b) => b.score - a.score).slice(0, 4).map((x) => x.f);
 }
 
 async function audioFrom(track, kbps) {
   if (track.source === 'soundcloud') return scAudio(track);
+  if (track.source === 'radiojavan') return rjAudio(track);
+  if (track.source === 'saavn') return saavnAudio(track, kbps);
   const viaCobalt = await cobalt(track.url, { downloadMode: 'audio', audioFormat: 'mp3', audioBitrate: kbps });
   if (viaCobalt) return { bytes: viaCobalt.bytes, ext: 'mp3', mime: 'audio/mpeg' };
   const vid = youtubeId(track.url);
@@ -287,7 +381,7 @@ async function audioFrom(track, kbps) {
   throw new Error('برای این لینک باید سرویس دانلود (cobalt) تنظیم شده باشد');
 }
 
-/** -> { bytes, ext, mime, via } ; tries the track itself, then the same song elsewhere. */
+/** -> { bytes, ext, mime, via } ; tries the track itself, then the same song on other sources. */
 export async function downloadAudio(track, kbps = '192') {
   let first;
   try {
@@ -296,16 +390,18 @@ export async function downloadAudio(track, kbps = '192') {
     first = e;
     console.warn('audio download failed', track.key, e.message);
   }
-  if (track.source === 'youtube' || track.source === 'soundcloud') {
-    for (const alt of await alternatives(track).catch(() => [])) {
+  if (MUSIC_SOURCES.includes(track.source)) {
+    for (const alt of await alternatives(track).catch((e) => (console.warn('alternatives', e.message), []))) {
       try {
-        return { ...(await audioFrom(alt, kbps)), via: alt.source };
+        return { ...(await audioFrom(alt, kbps)), via: alt.source, alt: { title: alt.title, artist: alt.artist, source: alt.source } };
       } catch (e) {
         console.warn('alternative failed', alt.key, e.message);
       }
     }
   }
-  throw first;
+  throw new Error(track.source === 'youtube'
+    ? 'این آهنگ فقط تو یوتیوب هست و یوتیوب دانلود از سرور رو بسته؛ یه نسخه‌ی دیگه از نتایج رو امتحان کن'
+    : String(first?.message || first));
 }
 
 /** -> { bytes, ext, mime, height } */

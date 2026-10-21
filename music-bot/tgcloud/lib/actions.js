@@ -1,7 +1,7 @@
 // Chat flows shared by the message and callback handlers.
 import { api, BotApiError } from 'sdk';
 import * as store from './store.js';
-import { search, remixes, fromUrl, linkMedia, downloadAudio } from './sources.js';
+import { search, remixes, fromUrl, linkMedia, downloadAudio, MUSIC_SOURCES } from './sources.js';
 import { recognize, queryOf } from './recognize.js';
 import { TooBig } from './deliver.js';
 import { cardKeyboard, resultsKeyboard, trackName, appButton } from './ui.js';
@@ -40,7 +40,7 @@ export async function withProgress(chatId, note, job) {
 export async function showCard(chatId, userId, t) {
   await store.setState(userId, 'last', t.id);
   const liked = (await store.likedIds(userId)).has(t.id);
-  const isLink = t.source !== 'youtube' && t.source !== 'soundcloud';
+  const isLink = !MUSIC_SOURCES.includes(t.source);
   const caption = `🎵 <b>${trackName(t)}</b>\n⏱ ${fmtTime(t.duration)} · ${esc(t.source)}\n<a href="${esc(t.url)}">لینک منبع</a>`;
   const reply_markup = await cardKeyboard(t.id, liked, isLink);
   if (t.thumb) {
@@ -121,7 +121,7 @@ export async function recognizeTrack(chatId, userId, t) {
   if (!(await store.getSetting('audd_token')) && !(await store.getSetting('acr_key'))) {
     return send(chatId, '🔍 برای تشخیص آهنگ دکمه زیر رو بزن (Shazam، رایگان):', await shazamKeyboard(`?t=${t.id}&shazam=1`));
   }
-  const media = t.source === 'youtube' || t.source === 'soundcloud'
+  const media = MUSIC_SOURCES.includes(t.source)
     ? await downloadAudio(t, '128')
     : await linkMedia(t.url);
   if (!media) return send(chatId, '⚠️ برای تشخیص آهنگ لینک‌های اینستا/تیک‌تاک، ادمین باید سرویس دانلود (cobalt_url) رو تنظیم کنه. فعلاً خود ویدیو رو اینجا بفرست.');

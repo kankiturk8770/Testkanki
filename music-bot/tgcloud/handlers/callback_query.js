@@ -3,8 +3,14 @@ import { api } from 'sdk';
 import * as store from '../lib/store.js';
 import { sendAudio, sendVideo, sendVoice } from '../lib/deliver.js';
 import { send, showCard, sendRemixes, withProgress, recognizeTrack } from '../lib/actions.js';
-import { audioQualityKeyboard, videoQualityKeyboard, playlistPicker, cardKeyboard, trackName } from '../lib/ui.js';
-import { AUDIO_QUALITIES } from '../lib/sources.js';
+import { audioQualityKeyboard, videoQualityKeyboard, playlistPicker, cardKeyboard, editKeyboard, moreKeyboard, trackName } from '../lib/ui.js';
+import { AUDIO_QUALITIES, MUSIC_SOURCES } from '../lib/sources.js';
+
+async function setMarkup(cb, chatId, reply_markup) {
+  try {
+    await api.editMessageReplyMarkup({ chat_id: chatId, message_id: cb.message.message_id, reply_markup });
+  } catch {}
+}
 
 const answer = (cb, text, alert = false) =>
   api.answerCallbackQuery({ callback_query_id: cb.id, ...(text ? { text, show_alert: alert } : {}) });
@@ -79,12 +85,16 @@ export default async function (cb) {
     case 'lk': {
       const liked = await store.toggleLike(uid, Number(a));
       await answer(cb, liked ? '❤️ به علاقه‌مندی‌ها اضافه شد' : 'از علاقه‌مندی‌ها حذف شد');
-      const isLink = JSON.stringify(cb.message?.reply_markup || {}).includes('"rec:');
-      try {
-        await api.editMessageReplyMarkup({ chat_id: chatId, message_id: cb.message.message_id, reply_markup: await cardKeyboard(Number(a), liked, isLink) });
-      } catch {}
+      if (b) await setMarkup(cb, chatId, await moreKeyboard(Number(a), b, liked));
       return;
     }
+    case 'mo': // "⋯": swap the row for the extra actions
+      await answer(cb);
+      return setMarkup(cb, chatId, await moreKeyboard(Number(a), b, (await store.likedIds(uid)).has(Number(a))));
+    case 'bk':
+      await answer(cb);
+      if (b === 'a') return setMarkup(cb, chatId, await editKeyboard(Number(a)));
+      return setMarkup(cb, chatId, await cardKeyboard(Number(a), false, !MUSIC_SOURCES.includes((await store.getTrack(a))?.source)));
     case 'pl':
       await answer(cb);
       return send(chatId, 'به کدوم پلی‌لیست اضافه بشه؟', { reply_markup: playlistPicker(Number(a), await store.playlists(uid)) });
