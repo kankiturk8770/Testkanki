@@ -35,13 +35,14 @@ export async function resultsKeyboard(tracks) {
 }
 
 /** Under every song the bot sends. where: a (audio message). */
-export async function songKeyboard(tid) {
-  return kb([[await appButton('✂️ برش', `?t=${tid}&edit=1`), btn('⋯', `mo:${tid}`)]]);
+export async function songKeyboard(tid, extra = []) {
+  return kb([[await appButton('✂️ برش', `?t=${tid}&edit=1`), ...extra, btn('⋯', `mo:${tid}`)]]);
 }
 
-export async function moreKeyboard(tid, liked) {
+/** video: the song's video can be fetched (needs a cobalt instance; YouTube blocks servers) */
+export async function moreKeyboard(tid, liked, video = false) {
   return kb([
-    [btn('🎬 ویدیو', `v:${tid}`), btn('🔁 ریمیکس‌ها', `rx:${tid}`), btn('🎚 کیفیت', `q:${tid}`)],
+    [video ? btn('🎬 ویدیو', `v:${tid}`) : null, btn('🔁 ریمیکس‌ها', `rx:${tid}`), btn('🎚 کیفیت', `q:${tid}`)],
     [btn('➕ پلی‌لیست', `pl:${tid}`), btn(liked ? '❤️' : '🤍', `lk:${tid}`), await appButton('🎧 پلیر', `?t=${tid}`), btn('🔙', `bk:${tid}`)],
   ]);
 }

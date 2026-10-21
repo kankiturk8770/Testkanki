@@ -14,12 +14,12 @@ function fileName(track, ext, suffix = '') {
 }
 
 /** Send the audio of a track to a chat; uses the cached file_id when there is one. */
-export async function sendAudio(chatId, track, kbps = '192', { silent = false, markup = true } = {}) {
+export async function sendAudio(chatId, track, kbps = '192', { silent = false, markup = true, extra: buttons = [] } = {}) {
   const variant = `a${kbps}`;
   const extra = {
     chat_id: chatId,
     disable_notification: silent,
-    ...(markup ? { reply_markup: await songKeyboard(track.id) } : {}),
+    ...(markup ? { reply_markup: await songKeyboard(track.id, buttons) } : {}),
   };
   const cached = await cachedFile(track.id, variant);
   if (cached) return api.sendAudio({ ...extra, audio: cached.fileId });

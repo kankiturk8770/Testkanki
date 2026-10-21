@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js" defer></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -43,7 +44,7 @@
         <span class="halo"></span><span class="halo h2"></span>
         <span class="orb-core"><i data-i="mic" class="xl"></i><span id="listen-label">گوش بده</span></span>
       </button>
-      <p id="listen-status" class="muted">بزن و گوشی رو نزدیک صدای آهنگ بگیر</p>
+      <p id="listen-status" class="status muted">بزن و گوشی رو نزدیک صدای آهنگ بگیر</p>
       <div class="seg" id="listen-mode">
         <button class="on" data-mode="song">آهنگ پخش میشه</button>
         <button data-mode="sing">خودم می‌خونم</button>
@@ -51,7 +52,7 @@
       <select id="sing-lang" class="pill" hidden>
         <option value="fa-IR">فارسی</option><option value="en-US">English</option><option value="tr-TR">Türkçe</option><option value="ar-SA">العربية</option>
       </select>
-      <label class="link-btn"><i data-i="folder"></i> انتخاب فایل<input type="file" id="listen-file" accept="audio/*,video/*" hidden></label>
+      <label class="pill file-pill"><i data-i="upload"></i> انتخاب فایل صوتی یا ویدیویی<input type="file" id="listen-file" accept="audio/*,video/*" hidden></label>
     </div>
     <div id="listen-result"></div>
   </section>
@@ -167,20 +168,14 @@
 
   <div class="panel glass" id="panel-edit" hidden>
     <div class="cut-bar" id="cut-bar"><div class="sel" id="cut-sel"></div><div class="head" id="cut-head"></div></div>
-    <div class="cut-times">
-      <div><small class="muted">شروع</small><b id="cut-a-t">0:00</b>
-        <div class="row"><button class="pill sm" data-nudge="a:-1">−</button><button class="pill sm" data-mark="a" title="از همین لحظه"><i data-i="pin"></i></button><button class="pill sm" data-nudge="a:1">+</button></div></div>
-      <div class="len"><small class="muted">طول</small><b id="cut-len">30s</b></div>
-      <div><small class="muted">پایان</small><b id="cut-b-t">0:30</b>
-        <div class="row"><button class="pill sm" data-nudge="b:-1">−</button><button class="pill sm" data-mark="b" title="تا همین لحظه"><i data-i="pin"></i></button><button class="pill sm" data-nudge="b:1">+</button></div></div>
-    </div>
-    <input type="range" id="cut-a" min="0" max="100" step="0.1" value="0">
-    <input type="range" id="cut-b" min="0" max="100" step="0.1" value="30">
+    <div class="cut-row"><span class="cut-lbl">شروع</span><input type="range" id="cut-a" min="0" max="100" step="0.1" value="0"><b id="cut-a-t">0:00</b></div>
+    <div class="cut-row"><span class="cut-lbl">پایان</span><input type="range" id="cut-b" min="0" max="100" step="0.1" value="30"><b id="cut-b-t">0:30</b></div>
+    <p class="muted note center">دسته‌ها رو بکش تا بخش دلخواهت انتخاب بشه · طول: <b id="cut-len">30s</b></p>
     <div class="row gap">
       <button class="pill grow" id="cut-preview"><i data-i="play"></i> گوش دادن</button>
       <button class="gold-btn grow" id="cut-send"><i data-i="send"></i> بفرست تو چت</button>
     </div>
-    <p class="muted note" id="edit-status"></p>
+    <p class="muted note center" id="edit-status"></p>
   </div>
 
   <div class="panel glass" id="panel-send" hidden>

@@ -22,11 +22,11 @@ export default async function (input, ctx) {
   const bytes = concatBytes(parts.map((p) => new Uint8Array(p.data)));
   const meta = input.meta || {};
   const t = await trackOrFail(meta.id);
-  const label = String(meta.label || 'edit').slice(0, 40);
+  // "Cut Lollipop", not timestamps
   const mp3 = meta.fmt !== 'wav';
-  const file = new InputFile(bytes, fileName(t, mp3 ? 'mp3' : 'wav', ` (${label})`), { type: mp3 ? 'audio/mpeg' : 'audio/wav' });
-  if (meta.voice) await api.sendVoice({ chat_id: uid, voice: file, caption: `✂️ ${label}` });
-  else await api.sendAudio({ chat_id: uid, audio: file, title: `${t.title} (${label})`, performer: t.artist || undefined });
-  await store.log(uid, 'edit', label, t.id);
+  const file = new InputFile(bytes, `Cut ${fileName(t, mp3 ? 'mp3' : 'wav')}`, { type: mp3 ? 'audio/mpeg' : 'audio/wav' });
+  if (meta.voice) await api.sendVoice({ chat_id: uid, voice: file, caption: `✂️ Cut ${t.title}` });
+  else await api.sendAudio({ chat_id: uid, audio: file, title: `Cut ${t.title}`, performer: t.artist || undefined });
+  await store.log(uid, 'edit', 'cut', t.id);
   return { ok: true };
 }

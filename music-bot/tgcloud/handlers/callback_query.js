@@ -4,7 +4,7 @@ import * as store from '../lib/store.js';
 import { sendVideo, sendVoice } from '../lib/deliver.js';
 import { send, sendRemixes, withProgress, deliverTrack } from '../lib/actions.js';
 import { qualityKeyboard, videoQualityKeyboard, playlistPicker, songKeyboard, moreKeyboard, trackName } from '../lib/ui.js';
-import { AUDIO_QUALITIES, linkInfo, linkVideo } from '../lib/sources.js';
+import { AUDIO_QUALITIES, linkInfo, linkVideo, videoAvailable } from '../lib/sources.js';
 
 async function setMarkup(cb, chatId, reply_markup) {
   try {
@@ -37,7 +37,7 @@ export default async function (cb) {
     }
     case 'mo': // "⋯" under a song
       await answer(cb);
-      return setMarkup(cb, chatId, await moreKeyboard(Number(a), (await store.likedIds(uid)).has(Number(a))));
+      return setMarkup(cb, chatId, await moreKeyboard(Number(a), (await store.likedIds(uid)).has(Number(a)), await videoAvailable()));
     case 'bk':
       await answer(cb);
       return setMarkup(cb, chatId, await songKeyboard(Number(a)));
@@ -88,7 +88,7 @@ export default async function (cb) {
     case 'lk': {
       const liked = await store.toggleLike(uid, Number(a));
       await answer(cb, liked ? '❤️ به علاقه‌مندی‌ها اضافه شد' : 'از علاقه‌مندی‌ها حذف شد');
-      return setMarkup(cb, chatId, await moreKeyboard(Number(a), liked));
+      return setMarkup(cb, chatId, await moreKeyboard(Number(a), liked, await videoAvailable()));
     }
     case 'pl':
       await answer(cb);

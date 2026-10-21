@@ -54,6 +54,8 @@ const ICONS = {
   pin: '<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
   music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
   star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+  upload: '<path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>',
+  check: '<circle cx="12" cy="12" r="9.5"/><path d="M7.5 12.5l3 3 6-6.5"/>',
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ""}</svg>`;
 const setIcon = (el, name) => { el.dataset.i = name; el.innerHTML = icon(name); };
@@ -138,7 +140,7 @@ function showView(id) {
   if (id === "v-library") loadLibrary();
   if (id === "v-history") loadHistory();
 }
-$$(".tabs button").forEach((b) => (b.onclick = () => { haptic(); showView(b.dataset.view); }));
+$$(".tabs button").forEach((b) => (b.onclick = () => { haptic(); closePlayer(); showView(b.dataset.view); }));
 
 /* ---------------- track lists ---------------- */
 function renderList(el, tracks, { emptyText = "چیزی نیست", onRemove } = {}) {
@@ -239,14 +241,21 @@ const player = {
     loading.hidden = false;
     $("#p-loading-text").textContent = "";
     try {
-      const { url } = await loadAudio(t, (n, total) => {
-        if (seq === this.loadSeq) $("#p-loading-text").textContent = `${Math.round((n / total) * 100)}%`;
-      });
+      // 1) the song's own CDN, streamed (starts in a moment); 2) Telegram's copy, in parts
+      const direct = await call("stream", { id: t.id }).catch(() => null);
       if (seq !== this.loadSeq) return;
-      audio.src = url;
-      if (autoplay) audio.play().catch(() => {});
+      if (direct?.kind && (await playDirect(direct, seq, autoplay))) {
+        t.stream = direct;
+      } else {
+        if (seq !== this.loadSeq) return;
+        const { url } = await loadAudio(t, (n, total) => {
+          if (seq === this.loadSeq) $("#p-loading-text").textContent = `${Math.round((n / total) * 100)}%`;
+        });
+        if (seq !== this.loadSeq) return;
+        setSource(url);
+        if (autoplay) audio.play().catch(() => {});
+      }
       call("played", { id: t.id }).catch(() => {});
-      preloadNext();
     } catch (e) {
       if (seq !== this.loadSeq) return;
       loading.hidden = true;
@@ -304,11 +313,55 @@ const player = {
   },
 };
 
-// fetch the next track in the background so skipping is instant
-function preloadNext() {
-  if (player.mode === "shuffle") return;
-  const t = player.queue[player.idx + 1];
-  if (t) loadAudio(t).catch(() => {});
+let hls = null;
+let switching = false; // errors while trying a source are not "this song is broken"
+function setSource(url) {
+  hls?.destroy();
+  hls = null;
+  audio.src = url;
+}
+
+/** Play a direct URL (file or HLS); resolves true once it can play, false if it fails in 12 s. */
+function playDirect(s, seq, autoplay) {
+  return new Promise((resolve) => {
+    switching = true;
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      switching = false;
+      audio.removeEventListener("canplay", onOk);
+      audio.removeEventListener("error", onErr);
+      clearTimeout(timer);
+      if (!ok) { hls?.destroy(); hls = null; audio.removeAttribute("src"); }
+      resolve(ok && seq === player.loadSeq);
+    };
+    const onOk = () => finish(true);
+    const onErr = () => finish(false);
+    const timer = setTimeout(() => finish(false), 12000);
+    audio.addEventListener("canplay", onOk);
+    audio.addEventListener("error", onErr);
+    if (s.kind === "hls" && !audio.canPlayType("application/vnd.apple.mpegurl")) {
+      if (!window.Hls?.isSupported()) return finish(false);
+      hls?.destroy();
+      hls = new Hls({ maxBufferLength: 30 });
+      hls.on(Hls.Events.ERROR, (_, d) => d.fatal && finish(false));
+      hls.loadSource(s.url);
+      hls.attachMedia(audio);
+    } else setSource(s.url);
+    if (autoplay) audio.play().catch(() => {});
+  });
+}
+
+/** Bytes of the current song for the cutter: straight from the CDN when possible. */
+async function songBlob(t) {
+  if (t.stream?.kind === "file") {
+    try {
+      const r = await fetch(t.stream.url);
+      if (r.ok) return await r.blob();
+    } catch {}
+  }
+  return (await loadAudio(t)).blob;
 }
 
 function setPlaying(on) {
@@ -323,7 +376,7 @@ audio.addEventListener("loadedmetadata", () => {
   setupCut();
 });
 audio.addEventListener("error", () => {
-  if (!audio.getAttribute("src")) return;
+  if (switching || !audio.getAttribute("src")) return;
   $("#p-loading").hidden = true;
   toast("⚠️ این فایل پخش نشد؛ آهنگ بعدی...");
   setTimeout(() => player.next(false), 1500);
@@ -427,11 +480,13 @@ if ("mediaSession" in navigator) {
 
 function openPlayer() {
   $("#player").hidden = false;
+  document.body.classList.add("player-open");
   tg?.BackButton?.show();
   paintAll();
 }
 function closePlayer() {
   $("#player").hidden = true;
+  document.body.classList.remove("player-open");
   tg?.BackButton?.hide();
 }
 $("#mini").onclick = openPlayer;
@@ -560,16 +615,6 @@ const jumpPreview = () => preview && (audio.currentTime = cut.a);
 $("#cut-a").oninput = () => { cut.a = +$("#cut-a").value; drawCut(); };
 $("#cut-b").oninput = () => { cut.b = +$("#cut-b").value; drawCut(); };
 $("#cut-a").onchange = jumpPreview;
-$$("[data-nudge]").forEach((b) => (b.onclick = () => {
-  const [k, v] = b.dataset.nudge.split(":");
-  cut[k] += +v;
-  drawCut();
-  jumpPreview();
-}));
-$$("[data-mark]").forEach((b) => (b.onclick = () => {
-  cut[b.dataset.mark] = audio.currentTime;
-  drawCut();
-}));
 $("#cut-bar").onclick = (e) => {
   const r = e.currentTarget.getBoundingClientRect();
   const t = ((e.clientX - r.left) / r.width) * trackDur();
@@ -619,7 +664,7 @@ function encodeMp3(buffer, kbps = 192) {
 
 /** The selection with a short fade in/out, as mp3. */
 async function renderCut() {
-  const { blob } = await loadAudio(player.cur);
+  const blob = await songBlob(player.cur);
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
   ctx.close();
@@ -722,29 +767,52 @@ async function shazamBlob(blob, deliver = false) {
 let engines = null;
 const getEngines = () => (engines ??= call("engines").catch(() => ({ fingerprint: false, humming: false })));
 
+/** Status line under the orb: kind = busy | ok | (plain) */
+function listenStatus(text, kind = "") {
+  const el = $("#listen-status");
+  el.innerHTML = (kind === "busy" ? '<span class="spinner"></span>' : kind === "ok" ? icon("check") : "") + `<span>${esc(text)}</span>`;
+}
+
+/** Songs as a two-column grid of covers. */
+function renderGrid(el, tracks) {
+  el.innerHTML = "";
+  el.className = "grid";
+  tracks.forEach((t, i) => {
+    const tile = document.createElement("div");
+    tile.className = "tile";
+    tile.innerHTML = `<img loading="lazy" src="${esc(t.thumb || PLACEHOLDER)}" onerror="this.src='${PLACEHOLDER}'"><b>${esc(t.title)}</b><small>${esc(t.artist || "")}</small>`;
+    tile.onclick = () => { haptic(); player.playList(tracks, i); };
+    el.appendChild(tile);
+  });
+}
+
 function showMatch(r, el, note = "") {
+  el.innerHTML = "";
   if (r.match) {
     const m = r.match;
-    el.innerHTML = `<div class="match glass"><img src="${esc(m.cover || r.tracks?.[0]?.thumb || PLACEHOLDER)}" onerror="this.src='${PLACEHOLDER}'"><div>
-      <h3>${esc(m.title)}</h3><p class="muted">${esc(m.artist || "")}</p>
-      ${r.tracks?.[0] ? `<button class="gold-btn send-btn" id="match-send">${icon("send")} بفرست تو چت</button>` : ""}</div></div>`;
+    el.innerHTML = `<div class="match glass"><img src="${esc(m.cover || r.tracks?.[0]?.thumb || PLACEHOLDER)}" onerror="this.src='${PLACEHOLDER}'">
+      <div class="grow-col"><h3>${esc(m.title)}</h3><p class="muted">${esc(m.artist || "")}</p></div>
+      ${r.tracks?.[0] ? `<button class="gold-btn send-btn" id="match-send">${icon("send")} بفرست</button>` : ""}</div>`;
     $("#match-send") && ($("#match-send").onclick = async (e) => {
-      e.target.disabled = true;
+      const b = e.currentTarget;
+      b.disabled = true;
       await call("sendTrack", { id: r.tracks[0].id, kind: "audio" }).then(() => toast("✅ تو چت فرستادم")).catch((x) => toast("⚠️ " + x.message));
-      e.target.disabled = false;
+      b.disabled = false;
     });
     haptic("heavy");
-    $("#listen-status").textContent = "✅ پیدا شد!";
+    listenStatus("پیدا شد", "ok");
   } else if (r.transcript) {
-    el.innerHTML = `<div class="match glass"><div><b>📝 «${esc(r.transcript)}»</b></div></div>`;
-    $("#listen-status").textContent = "با کلمه‌هایی که خوندی گشتم 👇";
+    el.innerHTML = `<div class="match glass"><div class="grow-col"><b>«${esc(r.transcript)}»</b></div></div>`;
+    listenStatus("با کلمه‌هایی که خوندی گشتم");
   } else {
-    $("#listen-status").textContent = note || "😕 پیدا نشد؛ صدای واضح‌تر و نزدیک‌تر امتحان کن";
+    listenStatus(note || "پیدا نشد؛ صدای واضح‌تر و نزدیک‌تر امتحان کن");
   }
-  const list = document.createElement("div");
-  list.className = "list";
-  el.appendChild(list);
-  if (r.tracks?.length) renderList(list, r.tracks);
+  if (r.tracks?.length) {
+    el.insertAdjacentHTML("beforeend", '<div class="section-title">نسخه‌ها</div>');
+    const grid = document.createElement("div");
+    el.appendChild(grid);
+    renderGrid(grid, r.tracks);
+  }
 }
 
 let listenMode = "song";
@@ -752,7 +820,7 @@ $$("#listen-mode button").forEach((b) => (b.onclick = () => {
   listenMode = b.dataset.mode;
   $$("#listen-mode button").forEach((x) => x.classList.toggle("on", x === b));
   $("#sing-lang").hidden = listenMode !== "sing";
-  $("#listen-status").textContent = listenMode === "sing" ? "بزن و چند خط از آهنگ رو بخون" : "بزن و گوشی رو نزدیک صدای آهنگ بگیر";
+  listenStatus(listenMode === "sing" ? "بزن و چند خط از آهنگ رو بخون" : "بزن و گوشی رو نزدیک صدای آهنگ بگیر");
 }));
 $("#sing-lang").value = store.get("singLang", "fa-IR");
 $("#sing-lang").onchange = () => store.set("singLang", $("#sing-lang").value);
@@ -762,7 +830,7 @@ async function recognizeBlob(blob, spoken = "") {
   el.innerHTML = "";
   const sing = listenMode === "sing";
   try {
-    $("#listen-status").textContent = "🔍 دارم پیدا می‌کنم...";
+    listenStatus("دارم پیدا می‌کنم…", "busy");
     const r = await shazamBlob(blob).catch((e) => (console.warn("shazam", e), null));
     if (r) return showMatch(r, el);
     const eng = await getEngines();
@@ -773,7 +841,7 @@ async function recognizeBlob(blob, spoken = "") {
     if (spoken) return showMatch({ transcript: spoken, tracks: await call("search", { q: spoken }) }, el);
     showMatch({}, el, sing ? "😕 پیدا نشد؛ کلمه‌ها رو واضح‌تر بخون یا متن آهنگ رو تو جستجو بنویس" : "");
   } catch (e) {
-    $("#listen-status").textContent = "⚠️ " + e.message;
+    listenStatus("⚠️ " + e.message);
   }
 }
 
@@ -785,7 +853,7 @@ $("#listen-btn").onclick = async () => {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   } catch {
-    $("#listen-status").textContent = "⚠️ اجازه میکروفون داده نشد؛ می‌تونی تو چت ویس بفرستی.";
+    listenStatus("⚠️ اجازه میکروفون داده نشد؛ می‌تونی تو چت ویس بفرستی.");
     return;
   }
   const wasPlaying = !audio.paused;
@@ -825,13 +893,16 @@ $("#listen-btn").onclick = async () => {
   recorder.start();
   haptic("medium");
   $("#listen-btn").classList.add("rec");
-  $("#listen-status").textContent = sing ? "🎤 بخون..." : "👂 دارم گوش می‌دم...";
+  listenStatus(sing ? "بخون…" : "دارم گوش می‌دم…", "busy");
   $("#listen-label").textContent = `${left}`;
 };
 $("#listen-file").onchange = (e) => {
   const f = e.target.files[0];
-  if (f) recognizeBlob(f);
   e.target.value = "";
+  if (!f) return;
+  $("#listen-result").innerHTML = "";
+  listenStatus(`در حال خوندن «${f.name.slice(0, 30)}»…`, "busy");
+  recognizeBlob(f);
 };
 
 /* ---------------- library ---------------- */

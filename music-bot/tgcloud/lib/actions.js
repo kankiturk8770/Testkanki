@@ -2,7 +2,8 @@
 // song the user means, send the song itself; buttons are for "other versions", not for the next step.
 import { api, BotApiError } from 'sdk';
 import * as store from './store.js';
-import { search, remixes, fromUrl, linkInfo, bestMatches, youtubeId } from './sources.js';
+import { search, remixes, fromUrl, linkInfo, linkSound, bestMatches, youtubeId } from './sources.js';
+import { shazamBytes } from './shazam.js';
 import { recognize, queryOf } from './recognize.js';
 import { sendAudio, TooBig } from './deliver.js';
 import { resultsKeyboard, trackName, appButton, btn } from './ui.js';
@@ -50,32 +51,28 @@ export async function deliverTrack(chatId, userId, t, kbps = '192') {
 }
 
 /**
- * We know the song's name (Shazam, Instagram music, …): find the best full version and send it.
- * want: { title, artist }. Falls back to a result list when nothing matches well.
+ * We know the song's name (Shazam, Instagram music, …): find the best full version and send that one
+ * song. extra: buttons added under it (e.g. the post's video).
  */
-export async function sendSong(chatId, userId, want, { status = null, kind = 'recognize' } = {}) {
-  const label = `${esc(want.artist ? `${want.artist} - ${want.title}` : want.title)}`;
-  status = status ? (await edit(status, `🎵 ${label}\n⏳ دارم می‌فرستم...`), status) : await send(chatId, `🎵 ${label}\n⏳ دارم می‌فرستم...`);
-  const found = await bestMatches(want);
-  if (!found.length) {
-    const tracks = await store.upsertTracks(await search(queryOf(want), 8));
-    await store.log(userId, kind, queryOf(want), tracks[0]?.id ?? null);
-    if (!tracks.length) return edit(status, `🎵 ${label}\n😕 ولی فایلش رو پیدا نکردم.`);
-    return edit(status, `🎵 ${label}\nکدوم نسخه؟ 👇`, { reply_markup: await resultsKeyboard(tracks) });
-  }
+export async function sendSong(chatId, userId, want, { status = null, kind = 'recognize', extra = [] } = {}) {
+  const label = esc(want.artist ? `${want.artist} - ${want.title}` : want.title);
+  const note = `🎵 ${label}\n⏳`;
+  status = status ? (await edit(status, note), status) : await send(chatId, note);
+  let found = await bestMatches(want);
+  if (!found.length) found = (await search(queryOf(want), 3)).slice(0, 1); // nothing close: the top result
   const rows = await store.upsertTracks(found);
-  await store.log(userId, kind, queryOf(want), rows[0].id);
-  for (let i = 0; i < Math.min(2, found.length); i++) {
+  await store.log(userId, kind, queryOf(want), rows[0]?.id ?? null);
+  for (let i = 0; i < Math.min(3, found.length); i++) {
     const t = { ...found[i], ...rows[i] }; // keep the source's direct media link from the search
     try {
       await store.setState(userId, 'last', t.id);
-      await sendAudio(chatId, t, '192');
+      await sendAudio(chatId, t, '192', { extra });
       return quietDelete(status);
     } catch (e) {
       console.warn('send failed', t.key, e.message);
     }
   }
-  return edit(status, `🎵 ${label}\nکدوم نسخه رو بفرستم؟ 👇`, { reply_markup: await resultsKeyboard(rows) });
+  return edit(status, `🎵 ${label}\n😕 فایل این آهنگ رو پیدا نکردم.`);
 }
 
 export async function doSearch(chatId, userId, query) {
@@ -94,18 +91,13 @@ export async function sendRemixes(chatId, userId, t) {
   return edit(status, `🔁 ریمیکس‌ها و نسخه‌های دیگه‌ی <b>${trackName(t)}</b>:`, { reply_markup: await resultsKeyboard(found) });
 }
 
-async function shazamButton(chatId, text) {
-  const b = await appButton('🔍 پیدا کن', '?rec=1');
-  return send(chatId, text, b ? { reply_markup: { inline_keyboard: [[b]] } } : {});
-}
-
 /** "Artist - Title" -> { artist, title } */
 function splitName(s) {
   const i = s.indexOf(' - ');
   return i > 0 ? { artist: s.slice(0, i).trim(), title: s.slice(i + 3).trim() } : { title: s.trim(), artist: null };
 }
 
-/** A pasted link: send the song in it (and offer the post's video). */
+/** A pasted link: find the song in it and send it (with the post's video under it when there is one). */
 export async function openLink(chatId, userId, url) {
   if (youtubeId(url) || /soundcloud\.com\//.test(url)) {
     const t = await store.upsertTrack(await fromUrl(url));
@@ -114,40 +106,42 @@ export async function openLink(chatId, userId, url) {
   }
   const status = await send(chatId, '🔗 ⏳');
   const info = await linkInfo(url);
-  if (!info) return edit(status, '⚠️ این لینک رو نمی‌تونم باز کنم. لینک اینستاگرام، تیک‌تاک، یوتیوب یا ساندکلاد بفرست.');
-  // keep the link so "video" and Shazam can use it later
-  const linkTrack = await store.upsertTrack({ key: `link:${info.kind}:${info.id}`, source: info.kind, url, title: info.title.slice(0, 120), thumb: info.thumb || null });
-  await store.setState(userId, 'recfile', JSON.stringify({ link: url }));
-  await store.log(userId, 'open', url, linkTrack.id);
-  const videoBtn = info.video ? { reply_markup: { inline_keyboard: [[btn('🎬 دانلود ویدیوی پست', `lv:${linkTrack.id}`)]] } } : {};
-  const want = info.song || (info.hint && splitName(info.hint));
-  if (want) {
-    await edit(status, `🔗 آهنگ این پست: <b>${esc(queryOf(want))}</b>`, videoBtn);
-    return sendSong(chatId, userId, want, { kind: 'recognize' });
+  if (!info) return edit(status, '⚠️ این لینک باز نشد. لینک اینستاگرام، تیک‌تاک، یوتیوب یا ساندکلاد بفرست.');
+  const post = await store.upsertTrack({ key: `link:${info.kind}:${info.id}`, source: info.kind, url, title: info.title.slice(0, 120), thumb: info.thumb || null });
+  await store.log(userId, 'open', url, post.id);
+  const extra = info.video ? [btn('🎬 ویدیو', `lv:${post.id}`)] : [];
+  // what is actually playing beats what the post says it uses
+  let want = null;
+  try {
+    want = await shazamBytes((await linkSound(info)).bytes);
+  } catch (e) {
+    console.warn('link sound', e.message);
   }
-  await quietDelete(status);
-  const b = await appButton('🔍 پیدا کردن آهنگ', '?rec=1');
-  return send(chatId, '🔗 اسم آهنگ این پست نوشته نشده؛ دکمه رو بزن تا از روی صداش پیداش کنم 👇',
-    { reply_markup: { inline_keyboard: [[b, ...(info.video ? [btn('🎬 ویدیو', `lv:${linkTrack.id}`)] : [])].filter(Boolean)] } });
+  want ||= info.song || (info.hint && splitName(info.hint));
+  if (want) return sendSong(chatId, userId, want, { status, extra });
+  return edit(status, '😕 آهنگ این پست پیدا نشد.', extra.length ? { reply_markup: { inline_keyboard: [extra] } } : {});
 }
 
 /**
- * Voice / video / audio file: what song is this? Server-side engines run only if the admin set keys;
- * otherwise (or when they miss) the Mini App runs Shazam on the same file and the song comes back here.
+ * Voice / video / audio file: what song is this? Shazam runs right here; the paid engines (if the
+ * admin set keys) are the second try and the only way for humming.
  */
 export async function runRecognition(chatId, userId, sample, hum = false) {
+  const status = await send(chatId, '🎧 ⏳');
+  const s = typeof sample === 'function' ? await sample() : sample;
+  const match = hum ? null : await shazamBytes(s.bytes);
+  if (match) return sendSong(chatId, userId, match, { status });
   const configured = await store.getSetting('audd_token') || await store.getSetting('acr_key')
     || await store.getSetting('acr_hum_key') || await store.getSetting('stt_key');
-  if (!configured) return shazamButton(chatId, '🎧 دکمه رو بزن تا آهنگ این صدا رو پیدا کنم و برات بفرستم 👇');
-  const status = await send(chatId, '🎧 دارم گوش می‌دم...');
-  const res = await recognize(typeof sample === 'function' ? await sample() : sample, { hum });
-  if (res.match) return sendSong(chatId, userId, res.match, { status });
-  if (res.transcript) {
-    const q = res.lyricHits[0] ? queryOf(res.lyricHits[0]) : res.transcript;
-    const tracks = await store.upsertTracks(await search(q, 8));
-    await store.log(userId, 'recognize', res.transcript, tracks[0]?.id ?? null);
-    return edit(status, `📝 «${esc(res.transcript.slice(0, 200))}»\nاینا رو پیدا کردم 👇`, tracks.length ? { reply_markup: await resultsKeyboard(tracks) } : {});
+  if (configured) {
+    const res = await recognize(s, { hum });
+    if (res.match) return sendSong(chatId, userId, res.match, { status });
+    if (res.transcript) {
+      const q = res.lyricHits[0] ? queryOf(res.lyricHits[0]) : res.transcript;
+      const tracks = await store.upsertTracks(await search(q, 8));
+      await store.log(userId, 'recognize', res.transcript, tracks[0]?.id ?? null);
+      if (tracks.length) return edit(status, `📝 «${esc(res.transcript.slice(0, 200))}»`, { reply_markup: await resultsKeyboard(tracks) });
+    }
   }
-  await quietDelete(status);
-  return shazamButton(chatId, '😕 هنوز پیدا نشد؛ دکمه رو بزن تا با Shazam هم بگردم 👇');
+  return edit(status, '😕 پیدا نشد. صدای آهنگ باید واضح باشه؛ یه تیکه‌ی دیگه بفرست یا اسمش رو بنویس.');
 }

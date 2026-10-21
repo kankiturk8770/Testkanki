@@ -292,6 +292,56 @@ async function saavnAudio(track, kbps) {
   throw new Error('saavn: download failed');
 }
 
+// ---------------- direct playback URLs for the Mini App (all these CDNs allow any origin) ----------------
+
+async function scStream(track) {
+  const t = await scApi(`/tracks/${track.key.split(':')[1]}`);
+  const tr = (t.media?.transcodings || []).find((x) => x.format?.protocol === 'hls' && /^aac/.test(x.preset))
+    || (t.media?.transcodings || []).find((x) => x.format?.protocol === 'hls' && /^mp3/.test(x.preset));
+  if (!tr) return null;
+  const cid = await scClientId();
+  const { url } = await (await fetch(`${tr.url}?client_id=${cid}&track_authorization=${t.track_authorization}`)).json();
+  return url ? { kind: 'hls', url } : null;
+}
+
+async function directStream(track) {
+  if (track.source === 'radiojavan') {
+    const id = track.key.split(':')[1];
+    const media = track.media || (await rjSearch(`${track.artist || ''} ${track.title}`.trim(), 10)).find((t) => t.key === `radiojavan:${id}`)?.media;
+    return media ? { kind: 'file', url: media } : null;
+  }
+  if (track.source === 'saavn') {
+    let media = track.media;
+    if (!media) {
+      const id = track.key.split(':')[1];
+      const j = await (await fetch(`https://www.jiosaavn.com/api.php?__call=song.getDetails&pids=${id}&_format=json&_marker=0&api_version=4&ctx=web6dot0`, { headers: { 'User-Agent': UA } })).json().catch(() => ({}));
+      media = (j.songs?.[0] || j[id])?.more_info?.encrypted_media_url;
+    }
+    if (!media) return null;
+    return { kind: 'file', url: new TextDecoder().decode(desDecrypt(fromBase64(media), '38346591')).replace(/_96\.mp4$/, '_160.mp4') };
+  }
+  if (track.source === 'soundcloud') return scStream(track);
+  return null;
+}
+
+/** -> { kind: 'file' | 'hls', url, alt? } for instant playback, or null (then the player uses Telegram's copy). */
+export async function streamInfo(track) {
+  try {
+    const own = await directStream(track);
+    if (own) return own;
+  } catch (e) {
+    console.warn('stream', track.key, e.message);
+  }
+  if (!MUSIC_SOURCES.includes(track.source)) return null;
+  for (const alt of await alternatives(track).catch(() => [])) {
+    try {
+      const s = await directStream(alt);
+      if (s) return { ...s, alt: { title: alt.title, artist: alt.artist } };
+    } catch {}
+  }
+  return null;
+}
+
 // ---------------- cobalt (optional download service) ----------------
 // Any instance of https://github.com/imputnet/cobalt: set it with
 //   /set cobalt_url https://your-instance.example   and optionally   /set cobalt_key <api key>
@@ -343,7 +393,8 @@ function cleanTitle(t) {
   return (head || t.replace(/[(\[{][^)\]}]*[)\]}]/g, ' ')).replace(/\s+/g, ' ').trim();
 }
 
-const words = (s) => new Set(String(s || '').toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length > 1));
+// accents are dropped ("Agáchate" = "Agachate"), punctuation splits words
+const words = (s) => new Set(String(s || '').toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length > 1));
 
 function similarity(a, b) {
   const A = words(a), B = words(b);
@@ -414,6 +465,11 @@ export async function downloadAudio(track, kbps = '192') {
     : String(first?.message || first));
 }
 
+/** Video of a song can be fetched only through a cobalt instance (YouTube blocks servers). */
+export async function videoAvailable() {
+  return !!(await getSetting('cobalt_url'));
+}
+
 /** -> { bytes, ext, mime, height } */
 export async function downloadVideo(track, height = '720') {
   const viaCobalt = await cobalt(track.url, { downloadMode: 'auto', videoQuality: height, youtubeVideoCodec: 'h264' });
@@ -454,7 +510,8 @@ export async function fromUrl(url) {
 
 const IG_UA = 'Googlebot/2.1 (+http://www.google.com/bot.html)'; // Instagram serves the full reel page to crawlers
 const unjson = (x) => { try { return JSON.parse(`"${x}"`); } catch { return x; } };
-const unhtml = (x) => String(x || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)));
+const unhtml = (x) => String(x || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)));
 
 async function instagramInfo(url) {
   const code = (url.match(/instagram\.com\/(?:[^/]+\/)?(?:reel|reels|p|tv)\/([\w-]+)/) || [])[1];
@@ -462,7 +519,10 @@ async function instagramInfo(url) {
   const res = await fetch(`https://www.instagram.com/reel/${code}/`, { headers: { 'User-Agent': IG_UA } });
   const page = await res.text();
   const pick = (re) => { const m = page.match(re); return m ? unjson(m[1]) : null; };
-  const song = pick(/"song_name":"([^"]+)"/), artist = pick(/"artist_name":"([^"]+)"/);
+  // licensed music: "music_asset_info":{…"title":"Waved Up","display_artist":"Wavyeffect"…}
+  const asset = page.match(/"music_asset_info":\{[^}]*?"title":"([^"]+)"[^}]*?"display_artist":"([^"]+)"/);
+  const song = pick(/"song_name":"([^"]+)"/) || (asset && unjson(asset[1]));
+  const artist = pick(/"artist_name":"([^"]+)"/) || (asset && unjson(asset[2]));
   const original = pick(/"original_audio_title":"([^"]+)"/);
   const owner = pick(/"ig_artist":\{"username":"([^"]+)"/) || pick(/"username":"([^"]+)"/);
   const caption = unhtml((page.match(/og:title" content="([^"]{0,200})/) || [])[1]);
