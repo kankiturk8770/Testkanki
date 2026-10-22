@@ -1,6 +1,6 @@
 // Automatic channel posts, a few times a day: PUBG Mobile news (official YouTube channel + Google News)
-// written up in Persian by Gemini with the official picture, or a character picture made by an image
-// AI with a caption. In "approve" mode every post comes to the owner first with ✅ / 🔄 / ❌.
+// written up in Persian by Gemini, or a "set / character of the day" post. Pictures are always official
+// PUBG MOBILE art (the posters of the official channel's videos): an image AI doesn't know PUBG. In "approve" mode every post comes to the owner first with ✅ / 🔄 / ❌.
 import { db, fetch, InputFile } from 'sdk';
 import { sql } from 'sdk/db';
 import { esc, btn, call, send, now, digits } from './util.js';
@@ -21,8 +21,16 @@ const unxml = (s) => String(s || '').replace(/<!\[CDATA\[|\]\]>/g, '').replace(/
 // tournament streams are hours long and say nothing new
 const STREAM = /main event|group [a-z]\b|\bday \d|\blive\b|finals?\b|week \d|\[(en|ar|id|tr|ru|th|vn)\]|qualifier|league stage|survival stage/i;
 
-async function ytNews() {
-  const x = await (await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${YT_CHANNEL}`)).text();
+export async function ytNews() {
+  const r = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${YT_CHANNEL}`);
+  // the feed answers 404 now and then: the newest uploads from YouTube search instead
+  if (!r.ok) {
+    const lists = await Promise.all(['PUBG MOBILE', 'PUBG MOBILE update', 'PUBG MOBILE new', 'PUBG MOBILE coming'].map((q) => ytOfficial(q, 'CAISAhAB').catch(() => [])));
+    const seenVid = new Set();
+    return lists.flat().filter((v) => !STREAM.test(v.title) && !seenVid.has(v.vid) && seenVid.add(v.vid))
+      .map((v) => ({ key: 'yt:' + v.vid, vid: v.vid, title: v.title, desc: '', ts: now() - Math.round(v.days * 86400), source: 'PUBG MOBILE' }));
+  }
+  const x = await r.text();
   return [...x.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map(([, e]) => ({
     key: 'yt:' + (e.match(/<yt:videoId>(.*?)<\/yt:videoId>/) || [])[1],
     vid: (e.match(/<yt:videoId>(.*?)<\/yt:videoId>/) || [])[1],
@@ -33,7 +41,7 @@ async function ytNews() {
   })).filter((n) => n.vid && !STREAM.test(n.title));
 }
 
-async function googleNews() {
+export async function googleNews() {
   const q = encodeURIComponent('"PUBG Mobile" (update OR new OR collaboration OR season OR event OR leak)');
   const x = await (await fetch(`https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`, { headers: { 'User-Agent': UA } })).text();
   return [...x.matchAll(/<item>([\s\S]*?)<\/item>/g)].map(([, e]) => {
@@ -44,13 +52,42 @@ async function googleNews() {
   }).filter((n) => n.title && !/esports? charts|viewership|most-watched/i.test(n.title));
 }
 
-/** Newest item not posted before (official channel first), from the last 5 days. */
+// Official channel's videos found by YouTube search (sets, X-Suits, characters, collabs …).
+// params: EgIQAQ = videos only; CAISAhAB = videos, newest first
+async function ytOfficial(query, params = 'EgIQAQ%3D%3D') {
+  const res = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': UA },
+    body: JSON.stringify({ context: { client: { clientName: 'WEB', clientVersion: '2.20250101.00.00', hl: 'en' } }, query, params }),
+  });
+  const j = await res.json();
+  const out = [];
+  for (const sec of j?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents || []) {
+    for (const it of sec.itemSectionRenderer?.contents || []) {
+      const v = it.videoRenderer;
+      if (!v?.videoId || v.ownerText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId !== YT_CHANNEL) continue;
+      const age = (v.publishedTimeText?.simpleText || '').match(/(\d+)\s+(hour|day|week|month|year)/);
+      const days = age ? Number(age[1]) * { hour: 1 / 24, day: 1, week: 7, month: 30, year: 365 }[age[2]] : 9999;
+      out.push({ vid: v.videoId, title: v.title?.runs?.map((r) => r.text).join('') || '', days });
+    }
+  }
+  return out;
+}
+
+/** Newest item not posted before (official channel first), from the last 7 days. */
 async function freshNews() {
   const lists = await Promise.all([ytNews().catch(() => []), googleNews().catch(() => [])]);
-  const recent = (n) => n.ts && n.ts > now() - 5 * 86400;
+  const recent = (n) => n.ts && n.ts > now() - 7 * 86400;
   for (const list of lists) {
     for (const n of list.filter(recent).sort((a, b) => b.ts - a.ts)) {
-      if (!(await db.get(sql`SELECT k FROM seen WHERE k = ${n.key}`))) return n;
+      if (await db.get(sql`SELECT k FROM seen WHERE k IN (${n.key}, ${'cv:' + (n.vid || '')})`)) continue;
+      if (!n.vid) { // a news site's story: only with an official picture of the same thing
+        const words = n.title.replace(/PUBG Mobile/ig, '').split(/[^\w]+/).filter((w) => w.length > 3).slice(0, 5).join(' ');
+        const hit = (await ytOfficial(`PUBG MOBILE ${words}`).catch(() => [])).find((v) => v.days < 30);
+        if (!hit) continue;
+        n.vid = hit.vid;
+      }
+      return n;
     }
   }
   return null;
@@ -77,7 +114,6 @@ async function bytesOf(url, headers = {}) {
 }
 
 const ytThumb = (vid) => bytesOf(`https://i.ytimg.com/vi/${vid}/maxresdefault.jpg`).catch(() => bytesOf(`https://i.ytimg.com/vi/${vid}/hqdefault.jpg`));
-const aiPicture = (prompt) => bytesOf(`https://image.pollinations.ai/prompt/${encodeURIComponent(prompt.slice(0, 400))}?width=1024&height=1024&nologo=true&seed=${Math.floor(Math.random() * 1e6)}`);
 
 // ---------- writing ----------
 function parseJson(t) {
@@ -96,21 +132,34 @@ async function makeNews() {
 News title: ${n.title}
 Details: ${n.desc || '(none)'}
 Source: ${n.source}
-Answer JSON: {"title": short catchy Persian headline (max 60 chars), "body": Persian post, 3-5 short lines, casual and exciting, a few fitting emoji, only facts from the news (never invent dates or numbers), no hashtags, "img": English prompt for an illustration of this news (PUBG Mobile style, cinematic, no text, no logos)}`, true));
-  const photo = n.vid ? await ytThumb(n.vid) : await aiPicture(j.img || `PUBG Mobile ${n.title}, cinematic game key art, no text`);
-  await db.run(sql`INSERT INTO seen (k, ts) VALUES (${n.key}, ${now()}) ON CONFLICT(k) DO NOTHING`);
+Answer JSON: {"title": short catchy Persian headline (max 60 chars), "body": Persian post, 3-5 short lines, casual and exciting, a few fitting emoji, only facts from the news (never invent dates or numbers), no hashtags}`, true));
+  const photo = await ytThumb(n.vid);
+  // the same video must not come back as a "set of the day"
+  for (const k of [n.key, 'cv:' + n.vid]) await db.run(sql`INSERT INTO seen (k, ts) VALUES (${k}, ${now()}) ON CONFLICT(k) DO NOTHING`);
   const caption = `📰 <b>${esc(cleanText(j.title))}</b>\n\n${esc(cleanText(j.body))}\n\n🔗 <i>${esc(n.source || 'PUBG MOBILE')}</i>${await signature()}`;
   return { kind: 'news', caption, photo };
 }
 
-const LOOKS = ['female', 'female', 'male', 'female', 'duo of a female and a male'];
+// what a "set of the day" post is about; each search gives the official channel's posters
+const LOOKS = ['PUBG MOBILE new set', 'PUBG MOBILE X-Suit', 'PUBG MOBILE Mythic set', 'PUBG MOBILE new outfit', 'PUBG MOBILE character',
+  'PUBG MOBILE collaboration', 'PUBG MOBILE Royale Pass rewards', 'PUBG MOBILE Gilt set', 'PUBG MOBILE new skin'];
 async function makeChar() {
-  const who = LOOKS[Math.floor(Math.random() * LOOKS.length)];
-  const j = parseJson(await gemini(`You run a Persian Telegram channel for PUBG Mobile players. Invent today's "character of the day" post:
-a stylish ${who} PUBG Mobile style character with a cool outfit / skin set and a setting (map, weather, vehicle or weapon).
-Answer JSON: {"prompt": English image prompt: beautiful ${who} PUBG Mobile style character, the outfit and setting, cinematic 3D game key art, highly detailed, fully clothed, tasteful, no text, no logos,
-"name": a short cool Persian name for the outfit/set, "caption": Persian, 2-3 short lines about the look, then a question that makes members comment or react (e.g. which set is yours?), a few emoji, no hashtags}`, true));
-  const photo = await aiPicture(j.prompt);
+  const queries = [...LOOKS].sort(() => Math.random() - 0.5).slice(0, 3);
+  const found = (await Promise.all(queries.map((q) => ytOfficial(q).catch(() => [])))).flat()
+    .filter((v) => v.days < 730 && !STREAM.test(v.title)).sort((a, b) => a.days - b.days);
+  let pick = null;
+  for (const v of found) {
+    if (!(await db.get(sql`SELECT k FROM seen WHERE k IN (${'cv:' + v.vid}, ${'yt:' + v.vid})`))) {
+      pick = v;
+      break;
+    }
+  }
+  if (!pick) throw new Error('no official art found');
+  const j = parseJson(await gemini(`You run a Persian Telegram channel for PUBG Mobile players. Today's "set of the day" post shows the official poster of this PUBG MOBILE video:
+"${pick.title}" (${pick.days < 1 ? 'today' : Math.round(pick.days) + ' days ago'}).
+Answer JSON: {"name": short Persian title for the set / character / item (keep its English name if it has one), "caption": Persian, 2-3 short lines about it (only what the title says, never invent prices or dates), then a question that makes members comment or react (e.g. do you have it? which one is yours?), a few emoji, no hashtags}`, true));
+  const photo = await ytThumb(pick.vid);
+  await db.run(sql`INSERT INTO seen (k, ts) VALUES (${'cv:' + pick.vid}, ${now()}) ON CONFLICT(k) DO NOTHING`);
   const caption = `🎨 <b>${esc(cleanText(j.name || 'ست امروز'))}</b>\n\n${esc(cleanText(j.caption))}${await signature()}`;
   return { kind: 'char', caption, photo };
 }
@@ -171,11 +220,11 @@ export async function testPost(uid, kind) {
   const wait = await send(uid, kind === 'news' ? '📰 دارم خبر تازه پیدا می‌کنم و می‌نویسم…' : '🎨 دارم عکس و متن می‌سازم…');
   try {
     const p = await makePost(kind);
-    if (kind === 'news' && p.kind !== 'news') await send(uid, 'ℹ️ خبر تازه‌ای که قبلاً نذاشته باشیم پیدا نشد؛ به‌جاش یه پست کاراکتر ساختم.');
+    if (kind === 'news' && p.kind !== 'news') await send(uid, 'ℹ️ خبر تازه‌ای که قبلاً نذاشته باشیم پیدا نشد؛ به‌جاش یه پست «ست روز» ساختم.');
     await deliverPost(p, 'approve');
   } catch (e) {
     console.error('autopost', e);
-    await send(uid, '⚠️ ساختنش نشد (هوش مصنوعی یا سرویس عکس جواب نداد). چند لحظه بعد دوباره بزن.');
+    await send(uid, '⚠️ ساختنش نشد (هوش مصنوعی یا یوتیوب جواب نداد). چند لحظه بعد دوباره بزن.');
   } finally {
     if (wait.ok) await call('deleteMessage', { chat_id: uid, message_id: wait.result.message_id });
   }
@@ -205,7 +254,7 @@ export async function autoTick() {
       await deliverPost(await makePost(i % 2 === 0 ? 'news' : 'char'), cfg.mode);
     } catch (e) {
       console.error('autopost slot', slot, e);
-      await send(await store.getSetting('owner'), `⚠️ پست خودکار ساعت ${times[i]} ساخته نشد (هوش مصنوعی یا سرویس عکس جواب نداد).`);
+      await send(await store.getSetting('owner'), `⚠️ پست خودکار ساعت ${times[i]} ساخته نشد (هوش مصنوعی یا یوتیوب جواب نداد).`);
     }
     return;
   }
@@ -219,7 +268,7 @@ export async function autoPanel(uid, edit = null) {
     `حالت: <b>${cfg.mode === 'auto' ? '⚡ مستقیم میره تو کانال' : '👀 اول برای تو میاد، تأیید کنی میره'}</b>\n` +
     `ساعت‌ها: <b>${cfg.times.join(' ، ')}</b>\n` +
     `کانال: <b>${esc(cfg.title || 'انتخاب نشده')}</b>\n\n` +
-    'هر روز سر این ساعت‌ها یکی در میون:\n📰 خبر تازه‌ی پابجی موبایل (از کانال رسمی و سایت‌های خبری) با عکس\n🎨 عکس کاراکتر خوشگل با یه متن جذاب\n\n' +
+    'هر روز سر این ساعت‌ها یکی در میون:\n📰 خبر تازه‌ی پابجی موبایل (از کانال رسمی و سایت‌های خبری)\n🎨 ست / کاراکتر روز با یه متن جذاب\nعکس‌ها همه پوسترهای رسمی پابجی موبایل هستن.\n\n' +
     '👇 «🧪 الان بساز» رو بزن تا ببینی چی می‌سازه:';
   const kb = [
     [btn(cfg.on ? '🔴 خاموش کن' : '🟢 روشنش کن', 'au:on'), btn(cfg.mode === 'auto' ? '👀 با تأیید من' : '⚡ مستقیم بفرسته', 'au:mode')],
