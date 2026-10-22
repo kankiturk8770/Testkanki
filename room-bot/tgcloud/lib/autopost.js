@@ -217,6 +217,27 @@ async function signature() {
 }
 
 const day = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
+
+// How Persian PUBG players write the game's words; the AI spells them its own way otherwise ("ایکس‌سیت").
+const GLOSSARY = `Write PUBG Mobile terms the way Persian players do: X-Suit = ایکس‌سوت, Mythic = متیک, Mythic Forge = متیک فورج,
+Gilt Set = ست گیلت, Ultimate Set = ست آلتیمیت, Legendary = لجندری, Royale Pass / RP = رویال پس, Prime Plus = پرایم پلاس,
+UC = یوسی, Lucky Spin = لاکی اسپین, Premium Crate = کریت پریمیوم (جعبه طلایی), Classic Crate = کریت کلاسیک, Upgradable gun = اسلحه آپگریدی,
+M416 = ام‌فور, AKM = آکا, Groza = گروزا, Kar98 = کار ۹۸, AWM = اوشن, Amazing Rebate = امیزینگ ریبیت, Prize Path = پرایز پث,
+event = ایونت, update = آپدیت, beta = بتا, season = سیزن, helmet = کلاه، emote = ایموت, companion = کمپانیون, collab = همکاری,
+Erangel/Livik/Miramar/Sanhok/Vikendi/Rondo = ارنگل/لیویک/میرامار/ساناک/ویکندی/رندو. Keep a set's or item's own name in English
+(e.g. ست گیلت Sanguine Sonata). Correct, natural Persian; no word-by-word translation.`;
+
+// the same thing (one set, one event) is told once, however many videos talk about it
+const topicKey = (kw) => 'kw:' + String(kw || '').toLowerCase().replace(/pubg|mobile|update|new|set|the/g, '').replace(/[^a-z0-9]+/g, '').slice(0, 40);
+async function topicSeen(kw) {
+  const k = topicKey(kw);
+  if (k.length < 6) return false;
+  return !!(await db.get(sql`SELECT k FROM seen WHERE k = ${k} AND ts > ${now() - 3 * 86400}`));
+}
+async function markTopic(kw) {
+  const k = topicKey(kw);
+  if (k.length >= 6) await db.run(sql`INSERT INTO seen (k, ts) VALUES (${k}, ${now()}) ON CONFLICT(k) DO UPDATE SET ts = excluded.ts`);
+}
 const markSeen = async (...keys) => {
   for (const k of keys) await db.run(sql`INSERT INTO seen (k, ts) VALUES (${k}, ${now()}) ON CONFLICT(k) DO NOTHING`);
 };
@@ -240,6 +261,7 @@ ${want === 'tip'
     : `- "news": real, current PUBG Mobile news (update, version, beta, leak, set, X-Suit, weapon skin, event, collab, mode, season, Royale Pass, crate, rebate, release date)
 - "tip": a concrete PUBG Mobile trick or how-to (settings, sensitivity, gameplay)`}
 - "skip": ads, VPN / internet / DNS stuff, giveaways of other channels, memes, gameplay highlights, esports results, unrelated games, vague clickbait with no facts in the text, or anything already over or announced for a date that has passed
+${GLOSSARY}
 Answer JSON: {"type": "news"|"tip"|"skip", "title": short catchy Persian headline (max 60 chars), "body": Persian post, 3-6 short lines, casual and exciting, a few fitting emoji, only facts from the item (never invent dates, numbers, prices or steps; if it names a date, say it correctly relative to today; for a tip give the actual steps), no hashtags, no links, no channel names, write it as the channel's own post (never say "in this video"), "keywords": 2-4 English words naming the thing (e.g. "Gilt Set", "4.7 update", "M416 Glacier")}`, true));
     if (j.type !== want) {
       if (j.type === 'skip' || !['news', 'tip'].includes(j.type)) await markSeen(n.key); // a tip stays for the tip slot
@@ -247,13 +269,17 @@ Answer JSON: {"type": "news"|"tip"|"skip", "title": short catchy Persian headlin
     }
     if (!j.title || !j.body) continue;
     await markSeen(n.key, ...(n.vid && !n.creator ? ['cv:' + n.vid] : []));
+    if (await topicSeen(j.keywords)) continue; // already told today or yesterday
+    await markTopic(j.keywords);
     // picture: the official video's poster, else an official poster of the same thing, else the creator's
     let vid = n.vid && !n.creator ? n.vid : null;
     if (!vid && want === 'news') vid = await officialPicture(String(j.keywords || '').slice(0, 60));
     if (vid && vid !== n.vid) await markSeen('cv:' + vid);
     if (!vid && n.creator) vid = n.vid;
     const photo = vid ? await ytThumb(vid).catch(() => null) : null;
-    const src = n.key.startsWith('tg:') ? '' : n.creator ? `\n\n🎥 <i>منبع: ${esc(n.source)}</i>` : `\n\n🔗 <i>${esc(n.source || 'PUBG MOBILE')}</i>`;
+    // source without names: only the official channel is called official
+    const src = n.key.startsWith('tg:') ? '' : n.creator ? '\n\n🎥 <i>منبع: یوتیوب</i>'
+      : n.key.startsWith('yt:') ? '\n\n✅ <i>منبع: کانال رسمی پابجی موبایل</i>' : '\n\n🌐 <i>منبع: سایت‌های خبری گیمینگ</i>';
     const icon = want === 'tip' ? '💡' : '📰';
     const caption = `${icon} <b>${esc(cleanText(j.title))}</b>\n\n${esc(cleanText(j.body))}${src}${await signature()}`;
     return { kind: want, caption, photo };
@@ -279,9 +305,12 @@ async function makeChar() {
 Today's "set of the day" post shows the official poster of this PUBG MOBILE video, published ${day(now() - Math.round(pick.days * 86400))}:
 "${pick.title}"
 If the title says something is "coming" on a date that is already past today, it is in the game now: say so, don't call it upcoming.
-Answer JSON: {"name": short Persian title for the set / character / item (keep its English name if it has one), "caption": Persian, 2-3 short lines about it (only what the title says, never invent prices or dates), then a question that makes members comment or react (e.g. do you have it? which one is yours?), a few emoji, no hashtags}`, true));
-  const photo = await ytThumb(pick.vid);
+${GLOSSARY}
+Answer JSON: {"keywords": 2-4 English words naming it, "name": short Persian title for the set / character / item (keep its English name if it has one), "caption": Persian, 2-3 short lines about it (only what the title says, never invent prices or dates), then a question that makes members comment or react (e.g. do you have it? which one is yours?), a few emoji, no hashtags}`, true));
   await markSeen('cv:' + pick.vid, 'yt:' + pick.vid);
+  if (await topicSeen(j.keywords)) return makeChar(); // another video of a set we just showed
+  await markTopic(j.keywords);
+  const photo = await ytThumb(pick.vid);
   const caption = `🎨 <b>${esc(cleanText(j.name || 'ست امروز'))}</b>\n\n${esc(cleanText(j.caption))}${await signature()}`;
   return { kind: 'char', caption, photo };
 }
