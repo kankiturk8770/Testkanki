@@ -10,6 +10,8 @@ import { gvMake, buildGv, gvKb } from './gv.js';
 import { aiEnabled, writePost } from './ai.js';
 
 const steps = (s) => SETS[s.kind];
+// under a "that answer didn't work" note while building a post
+export const STEP_BACK = [[btn('🔙 برگشت', 'again'), btn('❌ لغو', 'cancel')]];
 const cur = (s) => s.edit || s.keys[s.i];
 export const active = (st) => !!st.s && !!(st.s.edit || st.s.i < st.s.keys.length);
 
@@ -92,7 +94,7 @@ async function previewText(uid, s) {
   if (base === 'post') return sendBeauty(uid, s.d);
   const g = { ...gvMake(s.d), id: 0, status: 'open', endsAt: null, count: 0 };
   await send(uid, await buildGv(g), gvKb(g));
-  await send(uid, '🍀 <i>پیش‌نمایش قرعه‌کشی: دکمه‌ی شرکت بعد از ارسال فعال میشه.</i>');
+  await send(uid, '🍀 <i>پیش‌نمایش قرعه‌کشی: دکمه‌ی شرکت بعد از ارسال فعال میشه.</i>', false);
 }
 
 export async function preview(uid, st) {
@@ -173,34 +175,34 @@ export async function storeAnswer(uid, st, key, val) {
   val = String(val).trim();
   if (key === 'spons') {
     const ids = cleanIds(val);
-    if (!ids.length) return send(uid, '⚠️ آیدی معتبر نبود.\nمثال: @mychannel');
+    if (!ids.length) return send(uid, '⚠️ آیدی معتبر نبود.\nمثال: @mychannel', STEP_BACK);
     d.spons = ids;
     await store.setUserSpons(uid, ids);
   } else if (key === 'gwin' || key === 'gcap') {
     const n = Number(digits(val));
-    if (!Number.isInteger(n)) return send(uid, '⚠️ یه عدد بفرست (مثلا 50)');
-    if (n < 1 || n > 5000 || (key === 'gwin' && n > 50)) return send(uid, '⚠️ عدد معتبر نیست.');
-    if (key === 'gwin' && d.gcap && n > d.gcap) return send(uid, '⚠️ تعداد برنده نمیتونه از ظرفیت بیشتر باشه.');
-    if (key === 'gcap' && d.gwin && n < d.gwin) return send(uid, '⚠️ ظرفیت نمیتونه از تعداد برنده‌ها کمتر باشه.');
+    if (!Number.isInteger(n)) return send(uid, '⚠️ یه عدد بفرست (مثلا 50)', STEP_BACK);
+    if (n < 1 || n > 5000 || (key === 'gwin' && n > 50)) return send(uid, '⚠️ عدد معتبر نیست.', STEP_BACK);
+    if (key === 'gwin' && d.gcap && n > d.gcap) return send(uid, '⚠️ تعداد برنده نمیتونه از ظرفیت بیشتر باشه.', STEP_BACK);
+    if (key === 'gcap' && d.gwin && n < d.gwin) return send(uid, '⚠️ ظرفیت نمیتونه از تعداد برنده‌ها کمتر باشه.', STEP_BACK);
     d[key] = n;
   } else if (key === 'gend') {
     if (val === 'full' || /^d:\d+$/.test(val) || /^at:\d+$/.test(val)) d.gend = val;
     else {
       const ts = await parseWhen(val);
-      if (!ts) return send(uid, '⚠️ ساعت رو اینجوری بفرست: 23:30');
+      if (!ts) return send(uid, '⚠️ ساعت رو اینجوری بفرست: 23:30', STEP_BACK);
       d.gend = `at:${ts}`;
     }
   } else if (key === 'pstyle') {
-    if (!STYLES[val]) return send(uid, '🎨 یکی از دکمه‌ها رو بزن 👆');
+    if (!STYLES[val]) return send(uid, '🎨 یکی از دکمه‌ها رو بزن 👆', STEP_BACK);
     d.pstyle = val;
   } else if (key === 'pbtn') {
-    if (!val.includes('|')) return send(uid, '⚠️ اینجوری بفرست:\nمتن دکمه | لینک');
+    if (!val.includes('|')) return send(uid, '⚠️ اینجوری بفرست:\nمتن دکمه | لینک', STEP_BACK);
     const i = val.indexOf('|');
     const t = val.slice(0, i).trim();
     let u = val.slice(i + 1).trim();
     if (u.startsWith('@')) u = 'https://t.me/' + u.slice(1);
     else if (u.startsWith('t.me/')) u = 'https://' + u;
-    if (!t || !/^https?:\/\/\S+$/.test(u)) return send(uid, '⚠️ لینک معتبر نیست (باید با https شروع بشه).');
+    if (!t || !/^https?:\/\/\S+$/.test(u)) return send(uid, '⚠️ لینک معتبر نیست (باید با https شروع بشه).', STEP_BACK);
     d.pbtn = { t: t.slice(0, 60), u };
   } else d[key] = val;
   return done(uid, st);
@@ -215,7 +217,7 @@ async function targetsOf(uid, s) {
 export async function publish(uid, st) {
   const s = st.s;
   const tg = await targetsOf(uid, s);
-  if (!tg.length) return send(uid, '⚠️ هیچ کانالی انتخاب نشده. یکی رو انتخاب کن.');
+  if (!tg.length) return send(uid, '⚠️ هیچ کانالی انتخاب نشده. یکی رو انتخاب کن.', [[btn('🔙 برگشت', 'pv')]]);
   const [lines, ok] = await deliver(uid, kbase(s.kind), s.d, tg, s.pin);
   if (ok) {
     await store.setUserPin(uid, s.pin);
@@ -226,7 +228,7 @@ export async function publish(uid, st) {
 
 export async function schedPrompt(uid, st) {
   const s = st.s;
-  if (!(await targetsOf(uid, s)).length) return send(uid, '⚠️ هیچ کانالی انتخاب نشده. یکی رو انتخاب کن.');
+  if (!(await targetsOf(uid, s)).length) return send(uid, '⚠️ هیچ کانالی انتخاب نشده. یکی رو انتخاب کن.', [[btn('🔙 برگشت', 'pv')]]);
   s.mode = 'sched';
   return send(uid, '⏰ <b>زمان‌بندی ارسال</b>\n\nساعت دقیق رو تایپ کن (مثلا 23:30)\nیا +45 برای ۴۵ دقیقه دیگه.\nیا یکی از دکمه‌ها رو بزن 👇\n\n' +
     `🕓 الان: <b>${await store.localStr(now())}</b>`, [
@@ -338,6 +340,7 @@ export async function sessionCallback(uid, st, data, mid) {
     return go(uid, st);
   }
   if (data === 'pv') return preview(uid, st);
+  if (data === 'again') return active(st) ? go(uid, st) : preview(uid, st);
   if (data.startsWith('e:')) {
     s.edit = data.slice(2);
     s.mode = null;
@@ -394,7 +397,7 @@ export async function sessionCallback(uid, st, data, mid) {
 }
 
 async function aiBody(uid, st) {
-  const wait = await send(uid, '🪄 دارم می‌نویسم…');
+  const wait = await send(uid, '🪄 دارم می‌نویسم…', false);
   try {
     const body = await writePost(st.s.d.ptitle || '', st.s.d.pstyle);
     if (wait.ok) await call('deleteMessage', { chat_id: uid, message_id: wait.result.message_id });
@@ -402,6 +405,6 @@ async function aiBody(uid, st) {
   } catch (e) {
     console.warn('ai body', e.message);
     if (wait.ok) await call('deleteMessage', { chat_id: uid, message_id: wait.result.message_id });
-    return send(uid, '⚠️ هوش مصنوعی الان جواب نداد؛ متن رو خودت بفرست یا چند لحظه بعد دوباره بزن.');
+    return send(uid, '⚠️ هوش مصنوعی الان جواب نداد؛ متن رو خودت بفرست یا چند لحظه بعد دوباره بزن.', STEP_BACK);
   }
 }

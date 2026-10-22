@@ -5,7 +5,7 @@ import { aiEnabled } from '../lib/ai.js';
 import { aiCreate, AI_PROMPT } from '../lib/aiflow.js';
 import {
   active, welcome, HELP, startSession, showJobs, showChannels, showStats, addHelp, tryAdd, storeAnswer,
-  makeJob, parseWhen, menuKb, ask,
+  makeJob, parseWhen, menuKb, ask, STEP_BACK,
 } from '../lib/flow.js';
 import { gvMenu } from '../lib/gv.js';
 import { autoPanel, setTimes, setSources } from '../lib/autopost.js';
@@ -53,7 +53,7 @@ async function command(m, uid, st, cmd, arg, rest) {
   if (cmd === '/auto' && owner) return autoPanel(uid);
   if (cmd === '/timer' && owner) {
     return send(uid, '⏰ <b>زمان‌بندی دقیق</b>\n\nبرای اینکه پست‌های زمان‌بندی‌شده و قرعه‌کشی‌ها دقیق سر ساعت انجام بشن، این صفحه رو باز کن و مراحلش رو انجام بده (یه بار، ۲ دقیقه):',
-      [[{ text: '⏰ تنظیم زمان‌بندی دقیق', web_app: { url: WEBAPP } }]]);
+      [[{ text: '⏰ تنظیم زمان‌بندی دقیق', web_app: { url: WEBAPP } }], [btn('🔙 برگشت به منو', 'menu')]]);
   }
   if ((cmd === '/set' || cmd === '/unset') && owner) {
     if (!SETTABLE[arg]) return send(uid, '⚙️ تنظیمات:\n<code>/set gemini_key کلید</code> — هوش مصنوعی\n<code>/unset gemini_key</code> — خاموش کردنش');
@@ -101,7 +101,7 @@ async function handle(m, uid, st) {
   if (st.w === 'autosrc' && t) return setSources(uid, st, t);
   if (st.s?.mode === 'sched' && t) {
     const ts = await parseWhen(t);
-    if (!ts) return send(uid, '⚠️ ساعت رو اینجوری بفرست: 23:30 یا +45');
+    if (!ts) return send(uid, '⚠️ ساعت رو اینجوری بفرست: 23:30 یا +45', [[btn('🔙 برگشت به پیش‌نمایش', 'pv')]]);
     return makeJob(uid, st, ts);
   }
   if (active(st)) {
@@ -109,7 +109,7 @@ async function handle(m, uid, st) {
     const key = s.edit || s.keys[s.i];
     if (key === 'photo') {
       if (m.photo) return storeAnswer(uid, st, 'photo', m.photo[m.photo.length - 1].file_id);
-      return send(uid, '🖼 عکس بفرست یا «بدون بنر» رو بزن.');
+      return send(uid, '🖼 عکس بفرست یا «بدون بنر» رو بزن.', STEP_BACK);
     }
     if (key === 'rules') {
       if (t) {

@@ -19,10 +19,14 @@ export async function call(method, params) {
   }
 }
 
+// Every message has a way back: without its own buttons it gets "back to menu" (kb = false: none,
+// for "please wait…" notes that are deleted right after).
+export const MENU_BACK = [[{ text: '🔙 برگشت به منو', callback_data: 'menu' }]];
 export function send(chat, text, kb = null, extra = {}) {
+  const rows = kb === null ? MENU_BACK : kb;
   return call('sendMessage', {
     chat_id: chat, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true },
-    ...(kb ? { reply_markup: { inline_keyboard: kb } } : {}), ...extra,
+    ...(rows ? { reply_markup: { inline_keyboard: rows } } : {}), ...extra,
   });
 }
 

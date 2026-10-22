@@ -10,7 +10,7 @@ export const AI_PROMPT = '🪄 <b>بگو چی میخوای، خودم می‌س�
   '▫️ اطلاعیه: فردا سرور تست داریم، همه آنلاین باشید';
 
 export async function aiCreate(uid, st, text) {
-  const wait = await send(uid, '🪄 دارم می‌سازمش…');
+  const wait = await send(uid, '🪄 دارم می‌سازمش…', false);
   const drop = () => wait.ok && call('deleteMessage', { chat_id: uid, message_id: wait.result.message_id });
   let req;
   try {

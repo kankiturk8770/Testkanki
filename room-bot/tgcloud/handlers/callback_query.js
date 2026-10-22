@@ -43,7 +43,10 @@ async function handle(c, uid, st, data) {
   if (data === 'noop') return;
   if (data === 'auto' || /^(au|ap|ar|ax):/.test(data)) {
     if (!(await store.isOwner(uid))) return send(uid, '⛔️ این بخش فقط برای صاحب رباته.');
-    if (data === 'auto') return autoPanel(uid);
+    if (data === 'auto') {
+      st.w = null; // back from "type the times / sources"
+      return autoPanel(uid);
+    }
     if (data.startsWith('au:')) return autoAction(uid, st, data, mid);
     return draftAction(uid, data, c.message);
   }

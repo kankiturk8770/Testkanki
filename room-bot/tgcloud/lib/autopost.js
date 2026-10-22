@@ -214,6 +214,7 @@ export async function makePost(kind) {
 }
 
 // ---------- delivering ----------
+const PANEL_BACK = [[btn('🔙 برگشت', 'auto')]];
 const draftKb = (id) => [[btn('✅ بفرست تو کانال', `ap:${id}`)], [btn('🔄 یکی دیگه', `ar:${id}`), btn('❌ نه', `ax:${id}`)]];
 
 /** Send the post to the owner for approval, or straight to the channel. */
@@ -246,11 +247,11 @@ export async function draftAction(uid, data, msg) {
   }
   if (act === 'ap') {
     const cfg = await getAuto();
-    if (!cfg.chat) return send(uid, '⚠️ اول تو «📰 پست خودکار» کانال رو انتخاب کن.');
+    if (!cfg.chat) return send(uid, '⚠️ اول تو «📰 پست خودکار» کانال رو انتخاب کن.', PANEL_BACK);
     const r = d.photo
       ? await call('sendPhoto', { chat_id: cfg.chat, photo: d.photo, caption: d.caption, parse_mode: 'HTML' })
       : await call('sendMessage', { chat_id: cfg.chat, text: d.caption, parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-    if (!r.ok) return send(uid, `⚠️ نرفت: ${esc(r.description)}`);
+    if (!r.ok) return send(uid, `⚠️ نرفت: ${esc(r.description)}`, PANEL_BACK);
     await db.run(sql`UPDATE drafts SET status = 'sent' WHERE id = ${d.id}`);
     return done(`✅ رفت تو ${cfg.title || 'کانال'}`);
   }
@@ -261,15 +262,15 @@ export async function draftAction(uid, data, msg) {
 
 /** "Make one now" (and 🔄): build a post and show it to the owner. */
 export async function testPost(uid, kind) {
-  const wait = await send(uid, kind === 'news' ? '📰 دارم خبر تازه پیدا می‌کنم و می‌نویسم…' : '🎨 دارم عکس و متن می‌سازم…');
+  const wait = await send(uid, kind === 'news' ? '📰 دارم خبر تازه پیدا می‌کنم و می‌نویسم…' : '🎨 دارم عکس و متن می‌سازم…', false);
   try {
     const p = await makePost(kind);
-    if (!p) return send(uid, '📭 الان چیز تازه‌ای نیست: خبرهای چند روز اخیر و ست‌های سه هفته‌ی اخیر رو قبلاً ساختیم. بعداً دوباره بزن، یا تو «📡 منابع خبر» کانال اضافه کن.');
+    if (!p) return send(uid, '📭 الان چیز تازه‌ای نیست: خبرهای چند روز اخیر و ست‌های سه هفته‌ی اخیر رو قبلاً ساختیم. بعداً دوباره بزن، یا تو «📡 منابع خبر» کانال اضافه کن.', PANEL_BACK);
     if (p.kind !== kind) await send(uid, kind === 'news' ? 'ℹ️ خبر تازه‌ی جدیدی نبود؛ به‌جاش یه پست «ست روز» ساختم.' : 'ℹ️ ست تازه‌ی جدیدی نبود؛ به‌جاش یه خبر ساختم.');
     await deliverPost(p, 'approve');
   } catch (e) {
     console.error('autopost', e);
-    await send(uid, '⚠️ ساختنش نشد (هوش مصنوعی یا یوتیوب جواب نداد). چند لحظه بعد دوباره بزن.');
+    await send(uid, '⚠️ ساختنش نشد (هوش مصنوعی یا یوتیوب جواب نداد). چند لحظه بعد دوباره بزن.', PANEL_BACK);
   } finally {
     if (wait.ok) await call('deleteMessage', { chat_id: uid, message_id: wait.result.message_id });
   }
@@ -347,18 +348,18 @@ async function pickChannel(uid, cfg, next) {
 export async function autoAction(uid, st, data, mid) {
   const cfg = await getAuto();
   if (data === 'au:on') {
-    if (!cfg.chat && !(await pickChannel(uid, cfg, false))) return send(uid, '📢 اول یه کانال به ربات وصل کن (📢 کانال‌های من).');
+    if (!cfg.chat && !(await pickChannel(uid, cfg, false))) return send(uid, '📢 اول یه کانال به ربات وصل کن.', [[btn('📢 کانال‌های من', 'chs')], [btn('🔙 برگشت', 'auto')]]);
     cfg.on = !cfg.on;
   } else if (data === 'au:mode') cfg.mode = cfg.mode === 'auto' ? 'approve' : 'auto';
   else if (data === 'au:ch') {
-    if (!(await pickChannel(uid, cfg, true))) return send(uid, '📢 اول یه کانال به ربات وصل کن (📢 کانال‌های من).');
+    if (!(await pickChannel(uid, cfg, true))) return send(uid, '📢 اول یه کانال به ربات وصل کن.', [[btn('📢 کانال‌های من', 'chs')], [btn('🔙 برگشت', 'auto')]]);
   } else if (data === 'au:times') {
     st.w = 'autotimes';
-    return send(uid, '⏰ ساعت‌ها رو بفرست، با فاصله (هر چند تا خواستی):\n\nمثال: <code>12 17:30 21</code>', [[btn('🏠 منو', 'menu')]]);
+    return send(uid, '⏰ ساعت‌ها رو بفرست، با فاصله (هر چند تا خواستی):\n\nمثال: <code>12 17:30 21</code>', PANEL_BACK);
   } else if (data === 'au:src') {
     st.w = 'autosrc';
     return send(uid, '📡 <b>منابع خبر</b>\n\nآیدی کانال‌های عمومی تلگرام که اخبار، لیک و بتای پابجی رو زود میذارن بفرست (با فاصله). ربات جدیدترین پست‌هاشون (۲ روز اخیر) رو می‌خونه و به فارسی و با سبک خودش بازنویسی می‌کنه.\n\n' +
-      `الان: ${cfg.sources.length ? cfg.sources.map((x) => '@' + x).join(' ') : 'هیچی'}\n\nمثال: <code>@channel1 @channel2</code>\nبرای پاک کردن همه: <code>-</code>`, [[btn('🏠 منو', 'menu')]]);
+      `الان: ${cfg.sources.length ? cfg.sources.map((x) => '@' + x).join(' ') : 'هیچی'}\n\nمثال: <code>@channel1 @channel2</code>\nبرای پاک کردن همه: <code>-</code>`, PANEL_BACK);
   } else if (data.startsWith('au:t:')) {
     if (!cfg.chat && (await pickChannel(uid, cfg, false))) await saveAuto(cfg);
     return testPost(uid, data.slice(5));
@@ -374,7 +375,7 @@ export async function setTimes(uid, st, text) {
     if (!m || Number(m[1]) > 23 || Number(m[2] || 0) > 59) return null;
     return `${m[1].padStart(2, '0')}:${(m[2] || '00')}`;
   }).filter(Boolean))].sort().slice(0, 8);
-  if (!times.length) return send(uid, '⚠️ اینجوری بفرست: <code>12 17:30 21</code>');
+  if (!times.length) return send(uid, '⚠️ اینجوری بفرست: <code>12 17:30 21</code>', PANEL_BACK);
   const cfg = await getAuto();
   cfg.times = times;
   await saveAuto(cfg);
