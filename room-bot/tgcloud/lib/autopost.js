@@ -7,7 +7,15 @@ import { esc, btn, call, send, now, digits } from './util.js';
 import * as store from './store.js';
 import { gemini, cleanText } from './ai.js';
 
-const DEFAULT = { on: false, mode: 'approve', times: ['12:00', '17:00', '21:00'], chat: null, title: null, sources: [] };
+// Creators who report PUBG Mobile news, leaks and tricks first (chosen by the owner, editable in the panel).
+const CREATORS = [
+  ['UCQTeBv3p7q9rWWIC9vZvdWQ', 'Sobishow'], ['UCoFPD2vSR1ASDHnEbeY6cBw', 'PUBG ERRORIAN'], ['UCg5ZwCBahiaK6MYz6XcujMA', 'Javid Gaming'],
+  ['UC20D7JTd_Vgkh8mVVXhSkog', 'International TV'], ['UCUnaeRojh-SiauF2nqKSagA', 'AMIRREZAAR'], ['UCzcUK2OemzoCWXcOODSLO7Q', 'BTX Gaming'],
+  ['UCJ8RStb8ZmcobVGIh8fwnyw', 'PASHTON YT'], ['UCFqTfpH5x5QLXtfA6Hr7UYw', 'Gk Afroz'], ['UCzavu1YB-eUAIowh5BLin4A', 'Cinderella Gaming'],
+  ['UCffh6IaDaZDMwSycr3pXaaQ', 'Trotz PUBG'], ['UCGuBZLq7tPfjHPSla8_XoqA', 'BRADYBITS'], ['UCyNYZBZLdTX9f1piBIEN5FA', 'Emmi Plays'],
+  ['UCFQzl89P1a0AjwUMhnb6eqA', 'SOLSO'], ['UCuBnmJvEbxTs1QT09n8vVdg', 'MOSI_SOLO'], ['UCgn7fCFfIjUx34GMGbSEYaw', 'PUBG MOBILE Philippines'],
+].map(([id, name]) => ({ id, name }));
+const DEFAULT = { on: false, mode: 'approve', times: ['10:00', '14:00', '18:00', '22:00'], chat: null, title: null, sources: [], yt: CREATORS };
 export async function getAuto() {
   const v = await store.getSetting('auto');
   return { ...DEFAULT, ...(v ? JSON.parse(v) : {}) };
@@ -91,23 +99,79 @@ export async function tgPosts(name) {
   }).filter((n) => n.ts && n.desc.length > 30);
 }
 
-// how new an item must be: news is old after a few days
-const MAX_AGE = { tg: 2 * 86400, yt: 3 * 86400, gn: 3 * 86400 };
+// ---------- YouTube creators ----------
+async function innertube(path, body) {
+  const r = await fetch(`https://www.youtube.com/youtubei/v1/${path}?prettyPrint=false`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': UA },
+    body: JSON.stringify({ context: { client: { clientName: 'WEB', clientVersion: '2.20250101.00.00', hl: 'en' } }, ...body }),
+  });
+  return r.json();
+}
 
-/** Fresh items not posted before, best first: the owner's Telegram channels, the official channel, news sites. */
-async function freshNews() {
+/** A channel's latest uploads (videos tab, newest first). */
+async function channelVideos(ch) {
+  const b = await innertube('browse', { browseId: ch.id, params: 'EgZ2aWRlb3PyBgQKAjoA' });
+  const out = [];
+  JSON.stringify(b, (k, v) => {
+    if (k === 'lockupViewModel' && v?.contentId && out.length < 6) {
+      const meta = v.metadata?.lockupMetadataViewModel;
+      const age = (JSON.stringify(meta?.metadata || {}).match(/(\d+) (minute|hour|day|week|month|year)s? ago/) || []);
+      const days = age[1] ? Number(age[1]) * { minute: 1 / 1440, hour: 1 / 24, day: 1, week: 7, month: 30, year: 365 }[age[2]] : 999;
+      out.push({ key: 'yv:' + v.contentId, vid: v.contentId, title: meta?.title?.content || '', ts: now() - Math.round(days * 86400), source: ch.name, creator: true });
+    }
+    return v;
+  });
+  return out;
+}
+
+/** What the video says, as far as its description tells (subtitles aren't reachable from here). */
+async function videoText(vid) {
+  const p = await innertube('player', { videoId: vid });
+  return String(p.videoDetails?.shortDescription || '').replace(/https?:\/\/\S+/g, '').replace(/\n{3,}/g, '\n\n').slice(0, 1500);
+}
+
+export async function creatorItems() {
   const cfg = await getAuto();
-  const picked = [...cfg.sources].sort(() => Math.random() - 0.5).slice(0, 3); // tgstat blocks many requests at once
-  const lists = await Promise.all([
-    Promise.all(picked.map((n) => tgPosts(n).catch(() => []))).then((l) => l.flat()),
-    ytNews().catch(() => []), googleNews().catch(() => []),
-  ]);
+  return (await Promise.all(cfg.yt.map((ch) => channelVideos(ch).catch(() => [])))).flat();
+}
+
+/** "@handle" or a channel link -> { id, name } */
+export async function resolveChannel(ref) {
+  const h = String(ref).trim().replace(/^https?:\/\/(www\.|m\.)?youtube\.com\//, '').replace(/^@?/, '@').replace(/[/?].*$/, '');
+  const r = await innertube('navigation/resolve_url', { url: `https://www.youtube.com/${h.startsWith('@UC') ? 'channel/' + h.slice(1) : h}` });
+  const id = r?.endpoint?.browseEndpoint?.browseId;
+  return id && id.startsWith('UC') ? { id, name: h.replace(/^@/, '') } : null;
+}
+
+// how new an item must be: news is old after a few days
+const MAX_AGE = { tg: 2 * 86400, yt: 3 * 86400, gn: 3 * 86400, yv: 2 * 86400 };
+
+/**
+ * Fresh items not posted before, best first. news: the owner's Telegram channels, the official channel,
+ * the creators, news sites. tip: the creators only (tricks come from people who show them, not from the AI).
+ */
+async function freshItems(want) {
+  const cfg = await getAuto();
+  let lists;
+  // titles that promise a trick (VPN / DNS / ping videos aren't PUBG tricks)
+  const TIPLIKE = /how to|trick|tips?\b|free|setting|sensitivity|guide|\bget\b|ترفند|آموزش|رایگان|تنظیمات|حساسیت|چطور|نحوه|بگیر/i;
+  const NOT_TIP = /\bdns\b|vpn|ping|پینگ|دی ان اس|وی پی ان|fiber|فیبر|kills?!|gameplay/i;
+  if (want === 'tip') lists = [(await creatorItems()).filter((x) => TIPLIKE.test(x.title) && !NOT_TIP.test(x.title))];
+  else {
+    const picked = [...cfg.sources].sort(() => Math.random() - 0.5).slice(0, 3); // tgstat blocks many requests at once
+    lists = await Promise.all([
+      Promise.all(picked.map((n) => tgPosts(n).catch(() => []))).then((l) => l.flat()),
+      ytNews().catch(() => []), creatorItems().catch(() => []), googleNews().catch(() => []),
+    ]);
+  }
   const out = [];
   for (const list of lists) {
-    for (const n of list.filter((x) => x.ts > now() - MAX_AGE[x.key.slice(0, 2)]).sort((a, b) => b.ts - a.ts)) {
+    const maxAge = want === 'tip' ? 4 * 86400 : null;
+    for (const n of list.filter((x) => x.ts > now() - (maxAge || MAX_AGE[x.key.slice(0, 2)])).sort((a, b) => b.ts - a.ts)) {
       if (await db.get(sql`SELECT k FROM seen WHERE k IN (${n.key}, ${'cv:' + (n.vid || '')})`)) continue;
       out.push(n);
-      if (out.length >= 3) return out;
+      if (out.length >= 4) return out;
     }
   }
   return out;
@@ -157,23 +221,42 @@ const markSeen = async (...keys) => {
   for (const k of keys) await db.run(sql`INSERT INTO seen (k, ts) VALUES (${k}, ${now()}) ON CONFLICT(k) DO NOTHING`);
 };
 
-async function makeNews() {
-  for (const n of await freshNews()) {
+/** A news or tip post from the newest item that really is one. */
+async function makeFrom(want) {
+  for (const n of await freshItems(want)) {
+    const text = n.creator ? await videoText(n.vid).catch(() => '') : n.desc;
+    if (n.creator && text.length < 40 && n.title.length < 25) { // "Yt 1441": nothing to go on
+      await markSeen(n.key);
+      continue;
+    }
     const j = parseJson(await gemini(`You run a Persian Telegram channel for PUBG Mobile players. Today is ${day(now())}.
-Item from ${n.source}, published ${day(n.ts)}:
+Item from ${n.source}${n.creator ? ' (a YouTube creator)' : ''}, published ${day(n.ts)}:
 Title: ${n.title}
-Text: ${n.desc || '(none)'}
-Decide if this is real, current PUBG Mobile news worth posting today (new update, version, beta, leak, set, X-Suit, event, collab, mode, season, Royale Pass). Skip ads, giveaways of other channels, memes, esports results, unrelated games, and anything already over or announced for a date that has passed and is no longer news.
-Answer JSON: {"skip": true|false, "title": short catchy Persian headline (max 60 chars), "body": Persian post, 3-5 short lines, casual and exciting, a few fitting emoji, only facts from the item (never invent dates, numbers or prices; if it names a date, say it correctly relative to today), no hashtags, no links, no channel names, "keywords": 2-4 English words naming the thing (e.g. "Gilt Set", "4.7 update")}`, true));
-    await markSeen(n.key, ...(n.vid ? ['cv:' + n.vid] : []));
-    if (j.skip || !j.title || !j.body) continue;
-    // picture: the video's own poster, else an official poster of the same thing, else text only
-    const vid = n.vid || (await officialPicture(String(j.keywords || '').slice(0, 60)));
+Text: ${text || '(none)'}
+What is it?
+${want === 'tip'
+    ? `- "tip": the text gives practical PUBG Mobile advice a player can act on: how to get something (free materials, gems, rewards, an item from an event or rebate), what to spend on or skip, settings, sensitivity, a gameplay trick. Write it as a how-to with the steps / advice from the text.
+- "news": only announcements with nothing to do`
+    : `- "news": real, current PUBG Mobile news (update, version, beta, leak, set, X-Suit, weapon skin, event, collab, mode, season, Royale Pass, crate, rebate, release date)
+- "tip": a concrete PUBG Mobile trick or how-to (settings, sensitivity, gameplay)`}
+- "skip": ads, VPN / internet / DNS stuff, giveaways of other channels, memes, gameplay highlights, esports results, unrelated games, vague clickbait with no facts in the text, or anything already over or announced for a date that has passed
+Answer JSON: {"type": "news"|"tip"|"skip", "title": short catchy Persian headline (max 60 chars), "body": Persian post, 3-6 short lines, casual and exciting, a few fitting emoji, only facts from the item (never invent dates, numbers, prices or steps; if it names a date, say it correctly relative to today; for a tip give the actual steps), no hashtags, no links, no channel names, write it as the channel's own post (never say "in this video"), "keywords": 2-4 English words naming the thing (e.g. "Gilt Set", "4.7 update", "M416 Glacier")}`, true));
+    if (j.type !== want) {
+      if (j.type === 'skip' || !['news', 'tip'].includes(j.type)) await markSeen(n.key); // a tip stays for the tip slot
+      continue;
+    }
+    if (!j.title || !j.body) continue;
+    await markSeen(n.key, ...(n.vid && !n.creator ? ['cv:' + n.vid] : []));
+    // picture: the official video's poster, else an official poster of the same thing, else the creator's
+    let vid = n.vid && !n.creator ? n.vid : null;
+    if (!vid && want === 'news') vid = await officialPicture(String(j.keywords || '').slice(0, 60));
+    if (vid && vid !== n.vid) await markSeen('cv:' + vid);
+    if (!vid && n.creator) vid = n.vid;
     const photo = vid ? await ytThumb(vid).catch(() => null) : null;
-    if (vid && !n.vid) await markSeen('cv:' + vid);
-    const src = n.key.startsWith('tg:') ? '' : `\n\n🔗 <i>${esc(n.source || 'PUBG MOBILE')}</i>`;
-    const caption = `📰 <b>${esc(cleanText(j.title))}</b>\n\n${esc(cleanText(j.body))}${src}${await signature()}`;
-    return { kind: 'news', caption, photo };
+    const src = n.key.startsWith('tg:') ? '' : n.creator ? `\n\n🎥 <i>منبع: ${esc(n.source)}</i>` : `\n\n🔗 <i>${esc(n.source || 'PUBG MOBILE')}</i>`;
+    const icon = want === 'tip' ? '💡' : '📰';
+    const caption = `${icon} <b>${esc(cleanText(j.title))}</b>\n\n${esc(cleanText(j.body))}${src}${await signature()}`;
+    return { kind: want, caption, photo };
   }
   return null;
 }
@@ -203,9 +286,11 @@ Answer JSON: {"name": short Persian title for the set / character / item (keep i
   return { kind: 'char', caption, photo };
 }
 
-/** A new post of this kind, else the other kind; null when there is nothing new at all. */
+const MAKERS = { news: () => makeFrom('news'), tip: () => makeFrom('tip'), char: makeChar };
+const FALLBACK = { news: ['news', 'char', 'tip'], tip: ['tip', 'news', 'char'], char: ['char', 'news', 'tip'] };
+/** A new post of this kind, else another kind; null when there is nothing new at all. */
 export async function makePost(kind) {
-  const order = kind === 'news' ? [makeNews, makeChar] : [makeChar, makeNews];
+  const order = FALLBACK[kind].map((k) => MAKERS[k]);
   for (const f of order) {
     const p = await f();
     if (p) return p;
@@ -262,11 +347,12 @@ export async function draftAction(uid, data, msg) {
 
 /** "Make one now" (and 🔄): build a post and show it to the owner. */
 export async function testPost(uid, kind) {
-  const wait = await send(uid, kind === 'news' ? '📰 دارم خبر تازه پیدا می‌کنم و می‌نویسم…' : '🎨 دارم عکس و متن می‌سازم…', false);
+  const wait = await send(uid, { news: '📰 دارم خبر تازه پیدا می‌کنم و می‌نویسم…', tip: '💡 دارم ترفند تازه پیدا می‌کنم…', char: '🎨 دارم ست تازه پیدا می‌کنم…' }[kind], false);
   try {
     const p = await makePost(kind);
     if (!p) return send(uid, '📭 الان چیز تازه‌ای نیست: خبرهای چند روز اخیر و ست‌های سه هفته‌ی اخیر رو قبلاً ساختیم. بعداً دوباره بزن، یا تو «📡 منابع خبر» کانال اضافه کن.', PANEL_BACK);
-    if (p.kind !== kind) await send(uid, kind === 'news' ? 'ℹ️ خبر تازه‌ی جدیدی نبود؛ به‌جاش یه پست «ست روز» ساختم.' : 'ℹ️ ست تازه‌ی جدیدی نبود؛ به‌جاش یه خبر ساختم.');
+    const NAME = { news: 'خبر', tip: 'ترفند', char: 'ست' };
+    if (p.kind !== kind) await send(uid, `ℹ️ ${NAME[kind]} تازه‌ای نبود؛ به‌جاش یه ${NAME[p.kind]} ساختم.`, false);
     await deliverPost(p, 'approve');
   } catch (e) {
     console.error('autopost', e);
@@ -277,6 +363,7 @@ export async function testPost(uid, kind) {
 }
 
 // ---------- schedule (called by the cron tick) ----------
+const PLAN = ['news', 'tip', 'news', 'char', 'news', 'news'];
 export async function autoTick() {
   const cfg = await getAuto();
   if (!cfg.on || !cfg.chat) return;
@@ -297,7 +384,12 @@ export async function autoTick() {
       ON CONFLICT(k) DO UPDATE SET v = excluded.v WHERE settings.v < excluded.v RETURNING v`)).rows[0];
     if (!won) continue;
     try {
-      const p = await makePost(i % 2 === 0 ? 'news' : 'char');
+      // the day's plan: news first, one tip a day, a fresh set now and then
+      const tipToday = (await store.getSetting('auto_tip_day')) === day;
+      let kind = PLAN[i % PLAN.length];
+      if (kind === 'tip' && tipToday) kind = 'news';
+      const p = await makePost(kind);
+      if (p?.kind === 'tip') await store.setSetting('auto_tip_day', day);
       if (p) await deliverPost(p, cfg.mode); // nothing new: better no post than an old one
     } catch (e) {
       console.error('autopost slot', slot, e);
@@ -315,14 +407,16 @@ export async function autoPanel(uid, edit = null) {
     `حالت: <b>${cfg.mode === 'auto' ? '⚡ مستقیم میره تو کانال' : '👀 اول برای تو میاد، تأیید کنی میره'}</b>\n` +
     `ساعت‌ها: <b>${cfg.times.join(' ، ')}</b>\n` +
     `کانال: <b>${esc(cfg.title || 'انتخاب نشده')}</b>\n` +
-    `📡 منابع خبر: ${cfg.sources.length ? cfg.sources.map((x) => '@' + x).join(' ') + ' + ' : ''}کانال رسمی یوتیوب پابجی + سایت‌های خبری\n\n` +
-    'هر روز سر این ساعت‌ها یکی در میون:\n📰 خبر تازه‌ی پابجی موبایل (فقط چند روز اخیر)\n🎨 ست / کاراکتر تازه (سه هفته‌ی اخیر) با یه متن جذاب\nعکس‌ها پوسترهای رسمی پابجی موبایل هستن. اگه چیز تازه‌ای نباشه، پست قدیمی نمیذاره.\n\n' +
+    `🎥 کانال‌های یوتیوب: ${cfg.yt.length} تا + کانال رسمی پابجی\n` +
+    `📡 کانال‌های تلگرام: ${cfg.sources.length ? cfg.sources.map((x) => '@' + x).join(' ') : 'هیچی'} · سایت‌های خبری\n\n` +
+    'برنامه‌ی هر روز (به ترتیب ساعت‌ها):\n📰 خبر · 💡 ترفند (روزی یکی) · 📰 خبر · 🎨 ست تازه · 📰 خبر …\n' +
+    'فقط چیزهای تازه (خبر ۲ روز اخیر، ست ۳ هفته‌ی اخیر)؛ اگه چیز تازه‌ای نباشه، اون ساعت پست نمیذاره.\n\n' +
     '👇 «🧪 الان بساز» رو بزن تا ببینی چی می‌سازه:';
   const kb = [
     [btn(cfg.on ? '🔴 خاموش کن' : '🟢 روشنش کن', 'au:on'), btn(cfg.mode === 'auto' ? '👀 با تأیید من' : '⚡ مستقیم بفرسته', 'au:mode')],
     [btn('⏰ تغییر ساعت‌ها', 'au:times'), btn('📢 کانال', 'au:ch')],
-    [btn('📡 منابع خبر (کانال‌های تلگرام)', 'au:src')],
-    [btn('🧪 الان بساز: 📰 خبر', 'au:t:news'), btn('🧪 الان بساز: 🎨 کاراکتر', 'au:t:char')],
+    [btn('🎥 کانال‌های یوتیوب', 'au:yt'), btn('📡 کانال‌های تلگرام', 'au:src')],
+    [btn('🧪 📰 خبر', 'au:t:news'), btn('🧪 💡 ترفند', 'au:t:tip'), btn('🧪 🎨 ست', 'au:t:char')],
     [btn('🏠 منو', 'menu')],
   ];
   if (edit) {
@@ -356,6 +450,11 @@ export async function autoAction(uid, st, data, mid) {
   } else if (data === 'au:times') {
     st.w = 'autotimes';
     return send(uid, '⏰ ساعت‌ها رو بفرست، با فاصله (هر چند تا خواستی):\n\nمثال: <code>12 17:30 21</code>', PANEL_BACK);
+  } else if (data === 'au:yt') {
+    st.w = 'autoyt';
+    return send(uid, '🎥 <b>کانال‌های یوتیوب</b>\n\nربات ویدیوهای ۲ روز اخیر این کانال‌ها رو چک می‌کنه، از روی عنوان و توضیحات ویدیو خبر یا ترفند درمیاره و به فارسی می‌نویسه (ویدیوهای بی‌ربط مثل VPN و گیم‌پلی رو رد می‌کنه).\n\n' +
+      `الان:\n${cfg.yt.map((c) => '▫️ ' + esc(c.name)).join('\n')}\n\n` +
+      'اضافه کردن: آیدی یا لینک کانال رو بفرست، مثلا <code>+@PUBGMOBILE</code>\nحذف: <code>-اسم</code> مثلا <code>-SOLSO</code>', PANEL_BACK);
   } else if (data === 'au:src') {
     st.w = 'autosrc';
     return send(uid, '📡 <b>منابع خبر</b>\n\nآیدی کانال‌های عمومی تلگرام که اخبار، لیک و بتای پابجی رو زود میذارن بفرست (با فاصله). ربات جدیدترین پست‌هاشون (۲ روز اخیر) رو می‌خونه و به فارسی و با سبک خودش بازنویسی می‌کنه.\n\n' +
@@ -390,5 +489,29 @@ export async function setSources(uid, st, text) {
     .filter((w) => /^\w{4,32}$/.test(w)))].slice(0, 10);
   await saveAuto(cfg);
   st.w = null;
+  return autoPanel(uid);
+}
+
+/** Typed answer to "🎥 کانال‌های یوتیوب": "+@handle …" adds, "-name" removes. */
+export async function setCreators(uid, st, text) {
+  const cfg = await getAuto();
+  const added = [], bad = [];
+  for (const w of text.split(/[\s,،]+/).filter(Boolean)) {
+    if (w.startsWith('-')) {
+      const name = w.slice(1).replace(/^@/, '').toLowerCase();
+      cfg.yt = cfg.yt.filter((c) => c.name.toLowerCase().replace(/\s+/g, '') !== name.replace(/\s+/g, ''));
+      continue;
+    }
+    const ch = await resolveChannel(w.replace(/^\+/, '')).catch(() => null);
+    if (!ch) bad.push(w);
+    else if (!cfg.yt.some((c) => c.id === ch.id)) {
+      cfg.yt.push(ch);
+      added.push(ch.name);
+    }
+  }
+  cfg.yt = cfg.yt.slice(0, 30);
+  await saveAuto(cfg);
+  st.w = null;
+  if (bad.length) await send(uid, `⚠️ اینا پیدا نشدن: ${esc(bad.join(' '))}`, false);
   return autoPanel(uid);
 }
