@@ -8,7 +8,7 @@ import {
   makeJob, parseWhen, menuKb, ask,
 } from '../lib/flow.js';
 import { gvMenu } from '../lib/gv.js';
-import { autoPanel, setTimes } from '../lib/autopost.js';
+import { autoPanel, setTimes, setSources } from '../lib/autopost.js';
 
 // Settings the owner can set from the chat (keys never go in the code).
 const SETTABLE = { gemini_key: 'کلید Gemini' };
@@ -98,6 +98,7 @@ async function handle(m, uid, st) {
   }
   if (st.w === 'ai' && t) return aiCreate(uid, st, t);
   if (st.w === 'autotimes' && t) return setTimes(uid, st, t);
+  if (st.w === 'autosrc' && t) return setSources(uid, st, t);
   if (st.s?.mode === 'sched' && t) {
     const ts = await parseWhen(t);
     if (!ts) return send(uid, '⚠️ ساعت رو اینجوری بفرست: 23:30 یا +45');

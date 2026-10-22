@@ -7,7 +7,7 @@ import { esc, btn, call, send, now, digits } from './util.js';
 import * as store from './store.js';
 import { gemini, cleanText } from './ai.js';
 
-const DEFAULT = { on: false, mode: 'approve', times: ['12:00', '17:00', '21:00'], chat: null, title: null };
+const DEFAULT = { on: false, mode: 'approve', times: ['12:00', '17:00', '21:00'], chat: null, title: null, sources: [] };
 export async function getAuto() {
   const v = await store.getSetting('auto');
   return { ...DEFAULT, ...(v ? JSON.parse(v) : {}) };
@@ -74,23 +74,50 @@ async function ytOfficial(query, params = 'EgIQAQ%3D%3D') {
   return out;
 }
 
-/** Newest item not posted before (official channel first), from the last 7 days. */
+// Public Telegram channels the owner picked (news / leak / beta channels), read through tgstat.com:
+// Telegram's servers can't open t.me. Text and date only (tgstat doesn't show the pictures).
+const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+const strip = (h) => unxml(String(h).replace(/<br\s*\/?>/g, '\n').replace(/<[^>]+>/g, '')).replace(/\n{3,}/g, '\n\n').trim();
+export async function tgPosts(name) {
+  const x = await (await fetch(`https://tgstat.com/channel/@${name}`, { headers: { 'User-Agent': UA } })).text();
+  const year = new Date().getUTCFullYear();
+  return x.split(/class="card card-body border p-2 px-1 px-sm-3 post-container/).slice(1).map((p) => {
+    const id = (p.match(/\/channel\/@[\w]+\/(\d+)/) || [])[1];
+    const t = (p.match(/<small>\s*(\d{1,2}) (\w{3})(?: (\d{4}))?, (\d{1,2}):(\d{2})\s*<\/small>/) || []);
+    let ts = t[1] ? Date.UTC(Number(t[3] || year), MONTHS[t[2].toLowerCase()], Number(t[1]), Number(t[4]) - 3, Number(t[5])) / 1000 : 0; // tgstat shows Moscow time
+    if (ts > now() + 86400) ts = Date.UTC(year - 1, MONTHS[t[2].toLowerCase()], Number(t[1]), Number(t[4]) - 3, Number(t[5])) / 1000;
+    const text = strip((p.match(/<div class="post-text">([\s\S]*?)<\/div>/) || [])[1] || '');
+    return { key: `tg:${name}:${id}`, title: text.split('\n')[0].slice(0, 150), desc: text.slice(0, 1200), ts, source: '@' + name };
+  }).filter((n) => n.ts && n.desc.length > 30);
+}
+
+// how new an item must be: news is old after a few days
+const MAX_AGE = { tg: 2 * 86400, yt: 3 * 86400, gn: 3 * 86400 };
+
+/** Fresh items not posted before, best first: the owner's Telegram channels, the official channel, news sites. */
 async function freshNews() {
-  const lists = await Promise.all([ytNews().catch(() => []), googleNews().catch(() => [])]);
-  const recent = (n) => n.ts && n.ts > now() - 7 * 86400;
+  const cfg = await getAuto();
+  const picked = [...cfg.sources].sort(() => Math.random() - 0.5).slice(0, 3); // tgstat blocks many requests at once
+  const lists = await Promise.all([
+    Promise.all(picked.map((n) => tgPosts(n).catch(() => []))).then((l) => l.flat()),
+    ytNews().catch(() => []), googleNews().catch(() => []),
+  ]);
+  const out = [];
   for (const list of lists) {
-    for (const n of list.filter(recent).sort((a, b) => b.ts - a.ts)) {
+    for (const n of list.filter((x) => x.ts > now() - MAX_AGE[x.key.slice(0, 2)]).sort((a, b) => b.ts - a.ts)) {
       if (await db.get(sql`SELECT k FROM seen WHERE k IN (${n.key}, ${'cv:' + (n.vid || '')})`)) continue;
-      if (!n.vid) { // a news site's story: only with an official picture of the same thing
-        const words = n.title.replace(/PUBG Mobile/ig, '').split(/[^\w]+/).filter((w) => w.length > 3).slice(0, 5).join(' ');
-        const hit = (await ytOfficial(`PUBG MOBILE ${words}`).catch(() => [])).find((v) => v.days < 30);
-        if (!hit) continue;
-        n.vid = hit.vid;
-      }
-      return n;
+      out.push(n);
+      if (out.length >= 3) return out;
     }
   }
-  return null;
+  return out;
+}
+
+/** An official poster of the same thing (from the last month), for news from other sources. */
+async function officialPicture(keywords) {
+  if (!keywords) return null;
+  const hit = (await ytOfficial(`PUBG MOBILE ${keywords}`).catch(() => [])).find((v) => v.days < 30);
+  return hit ? hit.vid : null;
 }
 
 // ---------- pictures ----------
@@ -125,28 +152,38 @@ async function signature() {
   return cfg.username ? `\n\n🆔 @${cfg.username}` : '';
 }
 
+const day = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
+const markSeen = async (...keys) => {
+  for (const k of keys) await db.run(sql`INSERT INTO seen (k, ts) VALUES (${k}, ${now()}) ON CONFLICT(k) DO NOTHING`);
+};
+
 async function makeNews() {
-  const n = await freshNews();
-  if (!n) return null;
-  const j = parseJson(await gemini(`You run a Persian Telegram channel for PUBG Mobile players. Write a post about this news.
-News title: ${n.title}
-Details: ${n.desc || '(none)'}
-Source: ${n.source}
-Answer JSON: {"title": short catchy Persian headline (max 60 chars), "body": Persian post, 3-5 short lines, casual and exciting, a few fitting emoji, only facts from the news (never invent dates or numbers), no hashtags}`, true));
-  const photo = await ytThumb(n.vid);
-  // the same video must not come back as a "set of the day"
-  for (const k of [n.key, 'cv:' + n.vid]) await db.run(sql`INSERT INTO seen (k, ts) VALUES (${k}, ${now()}) ON CONFLICT(k) DO NOTHING`);
-  const caption = `📰 <b>${esc(cleanText(j.title))}</b>\n\n${esc(cleanText(j.body))}\n\n🔗 <i>${esc(n.source || 'PUBG MOBILE')}</i>${await signature()}`;
-  return { kind: 'news', caption, photo };
+  for (const n of await freshNews()) {
+    const j = parseJson(await gemini(`You run a Persian Telegram channel for PUBG Mobile players. Today is ${day(now())}.
+Item from ${n.source}, published ${day(n.ts)}:
+Title: ${n.title}
+Text: ${n.desc || '(none)'}
+Decide if this is real, current PUBG Mobile news worth posting today (new update, version, beta, leak, set, X-Suit, event, collab, mode, season, Royale Pass). Skip ads, giveaways of other channels, memes, esports results, unrelated games, and anything already over or announced for a date that has passed and is no longer news.
+Answer JSON: {"skip": true|false, "title": short catchy Persian headline (max 60 chars), "body": Persian post, 3-5 short lines, casual and exciting, a few fitting emoji, only facts from the item (never invent dates, numbers or prices; if it names a date, say it correctly relative to today), no hashtags, no links, no channel names, "keywords": 2-4 English words naming the thing (e.g. "Gilt Set", "4.7 update")}`, true));
+    await markSeen(n.key, ...(n.vid ? ['cv:' + n.vid] : []));
+    if (j.skip || !j.title || !j.body) continue;
+    // picture: the video's own poster, else an official poster of the same thing, else text only
+    const vid = n.vid || (await officialPicture(String(j.keywords || '').slice(0, 60)));
+    const photo = vid ? await ytThumb(vid).catch(() => null) : null;
+    if (vid && !n.vid) await markSeen('cv:' + vid);
+    const src = n.key.startsWith('tg:') ? '' : `\n\n🔗 <i>${esc(n.source || 'PUBG MOBILE')}</i>`;
+    const caption = `📰 <b>${esc(cleanText(j.title))}</b>\n\n${esc(cleanText(j.body))}${src}${await signature()}`;
+    return { kind: 'news', caption, photo };
+  }
+  return null;
 }
 
 // what a "set of the day" post is about; each search gives the official channel's posters
 const LOOKS = ['PUBG MOBILE new set', 'PUBG MOBILE X-Suit', 'PUBG MOBILE Mythic set', 'PUBG MOBILE new outfit', 'PUBG MOBILE character',
   'PUBG MOBILE collaboration', 'PUBG MOBILE Royale Pass rewards', 'PUBG MOBILE Gilt set', 'PUBG MOBILE new skin'];
 async function makeChar() {
-  const queries = [...LOOKS].sort(() => Math.random() - 0.5).slice(0, 3);
-  const found = (await Promise.all(queries.map((q) => ytOfficial(q).catch(() => [])))).flat()
-    .filter((v) => v.days < 730 && !STREAM.test(v.title)).sort((a, b) => a.days - b.days);
+  const found = (await Promise.all(LOOKS.map((q) => ytOfficial(q, 'CAISAhAB').catch(() => [])))).flat()
+    .filter((v) => v.days <= 21 && !STREAM.test(v.title)).sort((a, b) => a.days - b.days); // only things that are new now
   let pick = null;
   for (const v of found) {
     if (!(await db.get(sql`SELECT k FROM seen WHERE k IN (${'cv:' + v.vid}, ${'yt:' + v.vid})`))) {
@@ -154,23 +191,26 @@ async function makeChar() {
       break;
     }
   }
-  if (!pick) throw new Error('no official art found');
-  const j = parseJson(await gemini(`You run a Persian Telegram channel for PUBG Mobile players. Today's "set of the day" post shows the official poster of this PUBG MOBILE video:
-"${pick.title}" (${pick.days < 1 ? 'today' : Math.round(pick.days) + ' days ago'}).
+  if (!pick) return null;
+  const j = parseJson(await gemini(`You run a Persian Telegram channel for PUBG Mobile players. Today is ${day(now())}.
+Today's "set of the day" post shows the official poster of this PUBG MOBILE video, published ${day(now() - Math.round(pick.days * 86400))}:
+"${pick.title}"
+If the title says something is "coming" on a date that is already past today, it is in the game now: say so, don't call it upcoming.
 Answer JSON: {"name": short Persian title for the set / character / item (keep its English name if it has one), "caption": Persian, 2-3 short lines about it (only what the title says, never invent prices or dates), then a question that makes members comment or react (e.g. do you have it? which one is yours?), a few emoji, no hashtags}`, true));
   const photo = await ytThumb(pick.vid);
-  await db.run(sql`INSERT INTO seen (k, ts) VALUES (${'cv:' + pick.vid}, ${now()}) ON CONFLICT(k) DO NOTHING`);
+  await markSeen('cv:' + pick.vid, 'yt:' + pick.vid);
   const caption = `🎨 <b>${esc(cleanText(j.name || 'ست امروز'))}</b>\n\n${esc(cleanText(j.caption))}${await signature()}`;
   return { kind: 'char', caption, photo };
 }
 
-/** A new post of this kind (news falls back to a character post when there is no fresh news). */
+/** A new post of this kind, else the other kind; null when there is nothing new at all. */
 export async function makePost(kind) {
-  if (kind === 'news') {
-    const p = await makeNews();
+  const order = kind === 'news' ? [makeNews, makeChar] : [makeChar, makeNews];
+  for (const f of order) {
+    const p = await f();
     if (p) return p;
   }
-  return makeChar();
+  return null;
 }
 
 // ---------- delivering ----------
@@ -180,15 +220,17 @@ const draftKb = (id) => [[btn('✅ بفرست تو کانال', `ap:${id}`)], [b
 export async function deliverPost(p, mode) {
   const cfg = await getAuto();
   const owner = await store.getSetting('owner');
-  const photo = new InputFile(p.photo, 'post.jpg', { type: 'image/jpeg' });
+  const out = (chat, extra = {}) => p.photo
+    ? call('sendPhoto', { chat_id: chat, photo: new InputFile(p.photo, 'post.jpg', { type: 'image/jpeg' }), caption: p.caption, parse_mode: 'HTML', ...extra })
+    : call('sendMessage', { chat_id: chat, text: p.caption, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...extra });
   if (mode === 'auto' && cfg.chat) {
-    const r = await call('sendPhoto', { chat_id: cfg.chat, photo, caption: p.caption, parse_mode: 'HTML' });
+    const r = await out(cfg.chat);
     await send(owner, r.ok ? `✅ پست خودکار (${p.kind === 'news' ? 'خبر' : 'کاراکتر'}) تو «${esc(cfg.title)}» رفت.` : `⚠️ پست خودکار نرفت: ${esc(r.description)}`);
     return r.ok;
   }
   const row = (await db.run(sql`INSERT INTO drafts (kind, caption, status, created) VALUES (${p.kind}, ${p.caption}, 'wait', ${now()}) RETURNING id`)).rows[0];
-  const r = await call('sendPhoto', { chat_id: owner, photo, caption: p.caption, parse_mode: 'HTML', reply_markup: { inline_keyboard: draftKb(row.id) } });
-  if (r.ok) await db.run(sql`UPDATE drafts SET photo = ${r.result.photo.at(-1).file_id} WHERE id = ${row.id}`);
+  const r = await out(owner, { reply_markup: { inline_keyboard: draftKb(row.id) } });
+  if (r.ok && r.result.photo) await db.run(sql`UPDATE drafts SET photo = ${r.result.photo.at(-1).file_id} WHERE id = ${row.id}`);
   return r.ok;
 }
 
@@ -205,7 +247,9 @@ export async function draftAction(uid, data, msg) {
   if (act === 'ap') {
     const cfg = await getAuto();
     if (!cfg.chat) return send(uid, '⚠️ اول تو «📰 پست خودکار» کانال رو انتخاب کن.');
-    const r = await call('sendPhoto', { chat_id: cfg.chat, photo: d.photo, caption: d.caption, parse_mode: 'HTML' });
+    const r = d.photo
+      ? await call('sendPhoto', { chat_id: cfg.chat, photo: d.photo, caption: d.caption, parse_mode: 'HTML' })
+      : await call('sendMessage', { chat_id: cfg.chat, text: d.caption, parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
     if (!r.ok) return send(uid, `⚠️ نرفت: ${esc(r.description)}`);
     await db.run(sql`UPDATE drafts SET status = 'sent' WHERE id = ${d.id}`);
     return done(`✅ رفت تو ${cfg.title || 'کانال'}`);
@@ -220,7 +264,8 @@ export async function testPost(uid, kind) {
   const wait = await send(uid, kind === 'news' ? '📰 دارم خبر تازه پیدا می‌کنم و می‌نویسم…' : '🎨 دارم عکس و متن می‌سازم…');
   try {
     const p = await makePost(kind);
-    if (kind === 'news' && p.kind !== 'news') await send(uid, 'ℹ️ خبر تازه‌ای که قبلاً نذاشته باشیم پیدا نشد؛ به‌جاش یه پست «ست روز» ساختم.');
+    if (!p) return send(uid, '📭 الان چیز تازه‌ای نیست: خبرهای چند روز اخیر و ست‌های سه هفته‌ی اخیر رو قبلاً ساختیم. بعداً دوباره بزن، یا تو «📡 منابع خبر» کانال اضافه کن.');
+    if (p.kind !== kind) await send(uid, kind === 'news' ? 'ℹ️ خبر تازه‌ی جدیدی نبود؛ به‌جاش یه پست «ست روز» ساختم.' : 'ℹ️ ست تازه‌ی جدیدی نبود؛ به‌جاش یه خبر ساختم.');
     await deliverPost(p, 'approve');
   } catch (e) {
     console.error('autopost', e);
@@ -251,7 +296,8 @@ export async function autoTick() {
       ON CONFLICT(k) DO UPDATE SET v = excluded.v WHERE settings.v < excluded.v RETURNING v`)).rows[0];
     if (!won) continue;
     try {
-      await deliverPost(await makePost(i % 2 === 0 ? 'news' : 'char'), cfg.mode);
+      const p = await makePost(i % 2 === 0 ? 'news' : 'char');
+      if (p) await deliverPost(p, cfg.mode); // nothing new: better no post than an old one
     } catch (e) {
       console.error('autopost slot', slot, e);
       await send(await store.getSetting('owner'), `⚠️ پست خودکار ساعت ${times[i]} ساخته نشد (هوش مصنوعی یا یوتیوب جواب نداد).`);
@@ -267,12 +313,14 @@ export async function autoPanel(uid, edit = null) {
     `وضعیت: <b>${cfg.on ? '🟢 روشن' : '🔴 خاموش'}</b>\n` +
     `حالت: <b>${cfg.mode === 'auto' ? '⚡ مستقیم میره تو کانال' : '👀 اول برای تو میاد، تأیید کنی میره'}</b>\n` +
     `ساعت‌ها: <b>${cfg.times.join(' ، ')}</b>\n` +
-    `کانال: <b>${esc(cfg.title || 'انتخاب نشده')}</b>\n\n` +
-    'هر روز سر این ساعت‌ها یکی در میون:\n📰 خبر تازه‌ی پابجی موبایل (از کانال رسمی و سایت‌های خبری)\n🎨 ست / کاراکتر روز با یه متن جذاب\nعکس‌ها همه پوسترهای رسمی پابجی موبایل هستن.\n\n' +
+    `کانال: <b>${esc(cfg.title || 'انتخاب نشده')}</b>\n` +
+    `📡 منابع خبر: ${cfg.sources.length ? cfg.sources.map((x) => '@' + x).join(' ') + ' + ' : ''}کانال رسمی یوتیوب پابجی + سایت‌های خبری\n\n` +
+    'هر روز سر این ساعت‌ها یکی در میون:\n📰 خبر تازه‌ی پابجی موبایل (فقط چند روز اخیر)\n🎨 ست / کاراکتر تازه (سه هفته‌ی اخیر) با یه متن جذاب\nعکس‌ها پوسترهای رسمی پابجی موبایل هستن. اگه چیز تازه‌ای نباشه، پست قدیمی نمیذاره.\n\n' +
     '👇 «🧪 الان بساز» رو بزن تا ببینی چی می‌سازه:';
   const kb = [
     [btn(cfg.on ? '🔴 خاموش کن' : '🟢 روشنش کن', 'au:on'), btn(cfg.mode === 'auto' ? '👀 با تأیید من' : '⚡ مستقیم بفرسته', 'au:mode')],
     [btn('⏰ تغییر ساعت‌ها', 'au:times'), btn('📢 کانال', 'au:ch')],
+    [btn('📡 منابع خبر (کانال‌های تلگرام)', 'au:src')],
     [btn('🧪 الان بساز: 📰 خبر', 'au:t:news'), btn('🧪 الان بساز: 🎨 کاراکتر', 'au:t:char')],
     [btn('🏠 منو', 'menu')],
   ];
@@ -307,6 +355,10 @@ export async function autoAction(uid, st, data, mid) {
   } else if (data === 'au:times') {
     st.w = 'autotimes';
     return send(uid, '⏰ ساعت‌ها رو بفرست، با فاصله (هر چند تا خواستی):\n\nمثال: <code>12 17:30 21</code>', [[btn('🏠 منو', 'menu')]]);
+  } else if (data === 'au:src') {
+    st.w = 'autosrc';
+    return send(uid, '📡 <b>منابع خبر</b>\n\nآیدی کانال‌های عمومی تلگرام که اخبار، لیک و بتای پابجی رو زود میذارن بفرست (با فاصله). ربات جدیدترین پست‌هاشون (۲ روز اخیر) رو می‌خونه و به فارسی و با سبک خودش بازنویسی می‌کنه.\n\n' +
+      `الان: ${cfg.sources.length ? cfg.sources.map((x) => '@' + x).join(' ') : 'هیچی'}\n\nمثال: <code>@channel1 @channel2</code>\nبرای پاک کردن همه: <code>-</code>`, [[btn('🏠 منو', 'menu')]]);
   } else if (data.startsWith('au:t:')) {
     if (!cfg.chat && (await pickChannel(uid, cfg, false))) await saveAuto(cfg);
     return testPost(uid, data.slice(5));
@@ -325,6 +377,16 @@ export async function setTimes(uid, st, text) {
   if (!times.length) return send(uid, '⚠️ اینجوری بفرست: <code>12 17:30 21</code>');
   const cfg = await getAuto();
   cfg.times = times;
+  await saveAuto(cfg);
+  st.w = null;
+  return autoPanel(uid);
+}
+
+/** Typed answer to "📡 منابع خبر": @names, or "-" to clear. */
+export async function setSources(uid, st, text) {
+  const cfg = await getAuto();
+  cfg.sources = text.trim() === '-' ? [] : [...new Set(text.split(/[\s,،]+/).map((w) => w.replace(/^https?:\/\/t\.me\/(s\/)?|^@/g, '').replace(/\/.*$/, ''))
+    .filter((w) => /^\w{4,32}$/.test(w)))].slice(0, 10);
   await saveAuto(cfg);
   st.w = null;
   return autoPanel(uid);
