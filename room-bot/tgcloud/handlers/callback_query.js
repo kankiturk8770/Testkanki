@@ -7,6 +7,7 @@ import { aiEnabled } from '../lib/ai.js';
 import { AI_PROMPT } from '../lib/aiflow.js';
 import { welcome, HELP, startSession, showJobs, showChannels, showStats, addHelp, menuKb, sessionCallback } from '../lib/flow.js';
 import { gvJoin, gvMenu, showGvs, loadGv, drawGiveaway, cancelGiveaway } from '../lib/gv.js';
+import { autoPanel, autoAction, draftAction } from '../lib/autopost.js';
 
 export default async function (c) {
   const data = c.data || '';
@@ -39,6 +40,13 @@ async function handle(c, uid, st, data) {
   if (data.startsWith('gvn:')) return startSession(uid, st, 'gv_' + data.slice(4));
   if (data.startsWith('gvq:')) return startSession(uid, st, 'gv_' + data.slice(4), { quick: true });
   if (data === 'gvl') return showGvs(uid);
+  if (data === 'noop') return;
+  if (data === 'auto' || /^(au|ap|ar|ax):/.test(data)) {
+    if (!(await store.isOwner(uid))) return send(uid, '⛔️ این بخش فقط برای صاحب رباته.');
+    if (data === 'auto') return autoPanel(uid);
+    if (data.startsWith('au:')) return autoAction(uid, st, data, mid);
+    return draftAction(uid, data, c.message);
+  }
   if (data === 'ai') {
     if (!(await aiEnabled())) return welcome(uid, name);
     st.w = 'ai';

@@ -3,20 +3,25 @@ import { fetch } from 'sdk';
 import { getSetting } from './store.js';
 import { PRESETS, RULES } from './data.js';
 
-// Busy models answer 503/429: the next one in the list takes over.
-const MODELS = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest'];
+// Fastest first (a bot run is cut off after ~30 s; some models take longer than that).
+// A busy model answers 503/429 at once and the next one takes over.
+const MODELS = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'];
+const BUDGET = 16000; // ms: no new attempt after this, so the bot always gets to answer
 
 export const aiEnabled = async () => !!(await getSetting('gemini_key'));
 
-async function gemini(prompt, json = false) {
+export async function gemini(prompt, json = false) {
   const key = await getSetting('gemini_key');
   if (!key) throw new Error('no gemini key');
   let last = '';
+  const t0 = Date.now();
   for (const m of MODELS) {
+    if (Date.now() - t0 > BUDGET) break;
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(key)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        systemInstruction: { parts: [{ text: 'Answer with the requested content only: no greeting, no intro line, no explanation, no markdown.' }] },
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { temperature: json ? 0.2 : 0.9, ...(json ? { responseMimeType: 'application/json' } : {}) },
       }),
@@ -37,7 +42,14 @@ export async function writePost(title, style) {
     `یه متن کوتاه برای پست کانال تلگرام گیمرهای پابجی موبایل بنویس با موضوع «${title}».\n` +
     `لحن: ${mood}، فارسی محاوره‌ای، ۳ تا ۶ خط کوتاه، با چند اموجی مناسب.\n` +
     'فقط خود متن رو بده؛ بدون عنوان، بدون توضیح، بدون علامت‌های مارک‌داون مثل * یا #.');
-  return text.replace(/[*#`]/g, '').slice(0, 900);
+  return cleanText(text).slice(0, 900);
+}
+
+/** Drop markdown and a leading "here is your text:" line. */
+export function cleanText(t) {
+  const lines = String(t).replace(/[*#`]/g, '').trim().split('\n');
+  if (lines.length > 1 && /[:：]\s*$/.test(lines[0])) lines.shift();
+  return lines.join('\n').trim();
 }
 
 const ids = (key) => PRESETS[key].map(([, , v]) => v).join(' | ');

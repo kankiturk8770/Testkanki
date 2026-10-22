@@ -17,7 +17,7 @@ export const active = (st) => !!st.s && !!(st.s.edit || st.s.i < st.s.keys.lengt
 export async function menuKb() {
   const rows = [[btn('🆕  ساخت اعلام روم  🎮', 'new')],
     [btn('🎁 قرعه‌کشی', 'gv'), btn('✨ پست زیبا', 'post')]];
-  if (await aiEnabled()) rows.push([btn('🪄 بگو، خودم می‌سازم (هوش مصنوعی)', 'ai')]);
+  if (await aiEnabled()) rows.push([btn('🪄 بگو، خودم می‌سازم (هوش مصنوعی)', 'ai')], [btn('📰 پست خودکار (خبر و عکس روزانه)', 'auto')]);
   rows.push([btn('⏰ زمان‌بندی‌ها', 'jobs'), btn('📢 کانال‌های من', 'chs')],
     [btn('📊 آمار من', 'stats'), btn('❓ راهنما', 'help')]);
   return rows;

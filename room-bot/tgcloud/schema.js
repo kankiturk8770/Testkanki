@@ -72,3 +72,19 @@ export const settings = table('settings', {
   k: text('k').primaryKey(),
   v: text('v'),
 });
+
+// Automatic posts: news items already used (so nothing repeats), and drafts waiting for the owner's OK.
+export const seen = table('seen', {
+  k:  text('k').primaryKey(),
+  ts: integer('ts'),
+});
+
+// kind: news | char ; photo: Telegram file_id once shown to the owner ; status: wait | sent | drop
+export const drafts = table('drafts', {
+  id:      integer('id').primaryKey({ autoIncrement: true }),
+  kind:    text('kind').notNull(),
+  caption: text('caption').notNull(),
+  photo:   text('photo'),
+  status:  text('status').notNull(),
+  created: integer('created'),
+});
