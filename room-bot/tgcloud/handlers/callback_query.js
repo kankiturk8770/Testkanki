@@ -8,10 +8,14 @@ import { AI_PROMPT } from '../lib/aiflow.js';
 import { welcome, HELP, startSession, showJobs, showChannels, showStats, addHelp, menuKb, sessionCallback } from '../lib/flow.js';
 import { gvJoin, gvMenu, showGvs, loadGv, drawGiveaway, cancelGiveaway } from '../lib/gv.js';
 import { autoPanel, autoAction, draftAction } from '../lib/autopost.js';
-import { predictCallback } from '../lib/predict.js';
+import { predictCallback, channelPredict } from '../lib/predict.js';
 
 export default async function (c) {
   const data = c.data || '';
+  if (data.startsWith('pq:')) { // a score button under a channel post
+    await channelPredict(c);
+    return tick().catch((e) => console.error('tick', e));
+  }
   if (data.startsWith('gj:')) { // join button in a channel
     await gvJoin(c);
     return tick().catch((e) => console.error('tick', e));

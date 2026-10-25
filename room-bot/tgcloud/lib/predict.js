@@ -55,14 +55,34 @@ export async function predictCallback(c) {
   if (act === 'pp') {
     return call('editMessageText', { chat_id: uid, message_id: msg.message_id, text: await scoreText(g, A, B), parse_mode: 'HTML', reply_markup: { inline_keyboard: scoreKb(g, A, B) } });
   }
-  const name = [c.from.first_name, c.from.last_name].filter(Boolean).join(' ');
-  const row = (await db.run(sql`INSERT INTO predictions (gid, user_id, name, un, a, b, ts) VALUES (${g.id}, ${uid}, ${name}, ${c.from.username || null}, ${A}, ${B}, ${now()})
-    ON CONFLICT(gid, user_id) DO NOTHING RETURNING id`)).rows[0];
-  if (!row) return call('editMessageText', { chat_id: uid, message_id: msg.message_id, text: await blocked(g, uid) || '✅ ثبت شده.', parse_mode: 'HTML' });
-  await call('editMessageText', { chat_id: uid, message_id: msg.message_id, parse_mode: 'HTML',
+  if (!(await record(g, c.from, A, B))) return call('editMessageText', { chat_id: uid, message_id: msg.message_id, text: await blocked(g, uid) || '✅ ثبت شده.', parse_mode: 'HTML' });
+  return call('editMessageText', { chat_id: uid, message_id: msg.message_id, parse_mode: 'HTML',
     text: `✅ <b>پیش‌بینیت ثبت شد!</b>\n\n${esc(g.match.a)}  <b>${A} - ${B}</b>  ${esc(g.match.b)}\n\nبعد از بازی نتیجه تو کانال اعلام میشه. موفق باشی 🍀` });
+}
+
+/** Store one person's prediction (once) and update the count under the post. -> false if they already had one */
+async function record(g, from, A, B) {
+  const name = [from.first_name, from.last_name].filter(Boolean).join(' ');
+  const row = (await db.run(sql`INSERT INTO predictions (gid, user_id, name, un, a, b, ts) VALUES (${g.id}, ${from.id}, ${name}, ${from.username || null}, ${A}, ${B}, ${now()})
+    ON CONFLICT(gid, user_id) DO NOTHING RETURNING id`)).rows[0];
+  if (!row) return false;
   g.pcount = (g.pcount || 0) + 1;
-  return refreshAny(g); // the count under the channel post
+  await refreshAny(g);
+  return true;
+}
+
+/** pq:<gid>:<a>:<b> — a score button under the channel post: saved in one tap, the answer is a popup. */
+export async function channelPredict(c) {
+  const [, gid, a, b] = c.data.split(':');
+  const ans = (text) => call('answerCallbackQuery', { callback_query_id: c.id, text, show_alert: true });
+  if (c.from.is_bot) return ans('');
+  const g = await loadGv(gid);
+  const plain = (h) => h.replace(/<[^>]+>/g, '');
+  const why = await blocked(g, c.from.id);
+  if (why) return ans(plain(why));
+  const A = Number(a), B = Number(b);
+  if (!(await record(g, c.from, A, B))) return ans(plain((await blocked(g, c.from.id)) || '✅ ثبت شده.'));
+  return ans(`✅ پیش‌بینیت ثبت شد!\n\n${g.match.a}  ${A} - ${B}  ${g.match.b}\n\nقابل تغییر نیست. بعد از بازی نتیجه تو کانال اعلام میشه 🍀`);
 }
 
 const mention = (p) => `<a href="tg://user?id=${p.user_id}">${esc(p.name || 'کاربر')}</a>` + (p.un ? ` (@${esc(p.un)})` : '');
