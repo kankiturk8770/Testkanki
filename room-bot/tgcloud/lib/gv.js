@@ -247,23 +247,34 @@ export async function gvJoin(c) {
     const r = await call('getChatMember', { chat_id: sp, user_id: uid });
     if (r.ok && ['left', 'kicked'].includes(r.result.status)) return ans(`📢 اول باید عضو ${sp} بشی، بعد دوباره دکمه رو بزن.\n⚠️ تا آخر هم عضو بمون، وگرنه جایزه تعلق نمی‌گیره.`);
   }
-  if (await db.get(sql`SELECT id FROM entries WHERE gid = ${g.id} AND user_id = ${uid}`)) return ans('✅ قبلا ثبت‌نام کردی! منتظر نتیجه باش 🍀');
-  if (g.count >= g.cap) return ans('⛔️ ظرفیت پر شده یا قرعه‌کشی تموم شده.');
-  const name = [c.from.first_name, c.from.last_name].filter(Boolean).join(' ');
-  const row = (await db.run(sql`INSERT INTO entries (gid, user_id, name, un) VALUES (${g.id}, ${uid}, ${name}, ${c.from.username || null})
+  const r = await addEntry(g, c.from);
+  if (r === 'dup') return ans('✅ قبلا ثبت‌نام کردی! منتظر نتیجه باش 🍀');
+  if (r === 'full') return ans('⛔️ ظرفیت پر شده یا قرعه‌کشی تموم شده.');
+  const predicted = g.match && (await db.get(sql`SELECT id FROM predictions WHERE gid = ${g.id} AND user_id = ${uid}`));
+  await ans(g.match && !predicted && predictOpen(g)
+    ? '🎉 ثبت‌نامت انجام شد!\nحالا نتیجه رو هم با ➕ و ➖ پیش‌بینی کن و «ثبت نتیجه» رو بزن ⚽️'
+    : '🎉 ثبت‌نامت انجام شد!\nموفق باشی 🍀');
+  // full: draw now, unless the draw waits for the match result
+  if (r === 'last' && g.end !== 'result') return drawGiveaway(g.id);
+  return refreshPost(g);
+}
+
+/** Puts someone in the draw -> 'ok', 'last' (took the last seat), 'dup' or 'full'; g.count is updated. */
+export async function addEntry(g, from) {
+  if (await db.get(sql`SELECT id FROM entries WHERE gid = ${g.id} AND user_id = ${from.id}`)) return 'dup';
+  if (g.status !== 'open' || g.count >= g.cap) return 'full';
+  const name = [from.first_name, from.last_name].filter(Boolean).join(' ');
+  const row = (await db.run(sql`INSERT INTO entries (gid, user_id, name, un) VALUES (${g.id}, ${from.id}, ${name}, ${from.username || null})
     ON CONFLICT(gid, user_id) DO NOTHING RETURNING id`)).rows[0];
-  if (!row) return ans('✅ قبلا ثبت‌نام کردی! منتظر نتیجه باش 🍀');
+  if (!row) return 'dup';
   // two people tapping the last seat at once: the later one is out
   const rank = (await db.get(sql`SELECT COUNT(*) AS n FROM entries WHERE gid = ${g.id} AND id <= ${row.id}`)).n;
   if (rank > g.cap) {
     await db.run(sql`DELETE FROM entries WHERE id = ${row.id}`);
-    return ans('⛔️ ظرفیت پر شده یا قرعه‌کشی تموم شده.');
+    return 'full';
   }
-  await ans('🎉 ثبت‌نامت انجام شد!\nموفق باشی 🍀');
-  // full: draw now, unless the draw waits for the match result
-  if (rank >= g.cap && g.end !== 'result') return drawGiveaway(g.id);
   g.count = (await db.get(sql`SELECT COUNT(*) AS n FROM entries WHERE gid = ${g.id}`)).n;
-  return refreshPost(g);
+  return rank >= g.cap ? 'last' : 'ok';
 }
 
 export async function showGvs(uid) {

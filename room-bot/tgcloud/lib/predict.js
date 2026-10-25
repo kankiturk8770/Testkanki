@@ -5,7 +5,7 @@ import { db } from 'sdk';
 import { sql } from 'sdk/db';
 import { esc, btn, call, send, now, digits } from './util.js';
 import { localStr } from './store.js';
-import { loadGv, predictOpen, refreshAny, drawGiveaway, pickMembers, isMember, shown, winnersLines, claimRow, footer } from './gv.js';
+import { loadGv, predictOpen, refreshAny, drawGiveaway, addEntry, pickMembers, isMember, shown, winnersLines, claimRow, footer } from './gv.js';
 
 const MAX = 15;
 const scoreKb = (g, a, b) => [
@@ -55,20 +55,27 @@ export async function predictCallback(c) {
   if (act === 'pp') {
     return call('editMessageText', { chat_id: uid, message_id: msg.message_id, text: await scoreText(g, A, B), parse_mode: 'HTML', reply_markup: { inline_keyboard: scoreKb(g, A, B) } });
   }
-  if (!(await record(g, c.from, A, B))) return call('editMessageText', { chat_id: uid, message_id: msg.message_id, text: await blocked(g, uid) || '✅ ثبت شده.', parse_mode: 'HTML' });
+  const join = await record(g, c.from, A, B);
+  if (!join) return call('editMessageText', { chat_id: uid, message_id: msg.message_id, text: await blocked(g, uid) || '✅ ثبت شده.', parse_mode: 'HTML' });
   return call('editMessageText', { chat_id: uid, message_id: msg.message_id, parse_mode: 'HTML',
-    text: `✅ <b>پیش‌بینیت ثبت شد!</b>\n\n${esc(g.match.a)}  <b>${A} - ${B}</b>  ${esc(g.match.b)}\n\nبعد از بازی نتیجه تو کانال اعلام میشه. موفق باشی 🍀` });
+    text: `✅ <b>پیش‌بینیت ثبت شد!</b>\n\n${esc(g.match.a)}  <b>${A} - ${B}</b>  ${esc(g.match.b)}\n\n${joinedLine(join)}` });
 }
 
-/** Store one person's prediction (once) and update the count under the post. -> false if they already had one */
+/**
+ * Store one person's prediction (once) and update the counts under the post. A prediction also puts them in
+ * the draw (many missed the separate join button). -> false if they already had one, else 'ok' / 'last' when
+ * they got into the draw now, 'dup' / 'full' when not.
+ */
 async function record(g, from, A, B) {
   const name = [from.first_name, from.last_name].filter(Boolean).join(' ');
   const row = (await db.run(sql`INSERT INTO predictions (gid, user_id, name, un, a, b, ts) VALUES (${g.id}, ${from.id}, ${name}, ${from.username || null}, ${A}, ${B}, ${now()})
     ON CONFLICT(gid, user_id) DO NOTHING RETURNING id`)).rows[0];
   if (!row) return false;
   g.pcount = (g.pcount || 0) + 1;
-  await refreshAny(g);
-  return true;
+  const join = await addEntry(g, from);
+  if (join === 'last' && g.end !== 'result') await drawGiveaway(g.id);
+  else await refreshAny(g);
+  return join;
 }
 
 /**
@@ -78,6 +85,8 @@ async function record(g, from, A, B) {
 // the score in a popup: a line per team that starts with its name, so right-to-left text can't swap the numbers
 // (an "a - b" line came out mixed up, and a line starting with an emoji was cut off)
 const faNum = (n) => String(n).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
+const joinedLine = (join) => ({ ok: 'تو قرعه‌کشی هم خودکار ثبت‌نام شدی 🎟', last: 'تو قرعه‌کشی هم خودکار ثبت‌نام شدی 🎟',
+  dup: 'تو قرعه‌کشی هم ثبت‌نامی 🎟', full: 'ظرفیت قرعه‌کشی پر بود، ولی پیش‌بینیت حساب میشه 🍀' })[join];
 const score = (g, a, b) => `${g.match.a}: ${faNum(a)}\n${g.match.b}: ${faNum(b)}`;
 
 export async function channelPredict(c) {
@@ -91,9 +100,10 @@ export async function channelPredict(c) {
   if (why) return toast(plain(why), true);
   const cur = (await db.get(sql`SELECT a, b FROM pdrafts WHERE gid = ${g.id} AND user_id = ${uid}`)) || { a: 0, b: 0 };
   if (act === 'ok') {
-    if (!(await record(g, c.from, cur.a, cur.b))) return toast(plain((await blocked(g, uid)) || '✅ ثبت شده.'), true);
+    const join = await record(g, c.from, cur.a, cur.b);
+    if (!join) return toast(plain((await blocked(g, uid)) || '✅ ثبت شده.'), true);
     await db.run(sql`DELETE FROM pdrafts WHERE gid = ${g.id} AND user_id = ${uid}`);
-    return toast(`پیش‌بینیت ثبت شد ✅\n${score(g, cur.a, cur.b)}\nنتیجه بعد از بازی تو کانال اعلام میشه 🍀`, true);
+    return toast(`پیش‌بینیت ثبت شد ✅\n${score(g, cur.a, cur.b)}\n${joinedLine(join)}`, true);
   }
   const step = act.endsWith('+') ? 1 : act.endsWith('-') ? -1 : 0; // the team name itself just shows the score
   const a = act.startsWith('a') ? Math.min(MAX, Math.max(0, cur.a + step)) : cur.a;
