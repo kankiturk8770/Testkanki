@@ -10,6 +10,7 @@ export function gvMake(d) {
     theme: d.theme, title: d.gtitle || '',
     prize: d.gprize || d.gprize_c || (d.glamt ? `${d.glamt} لایک ${d.glike}` : '-'),
     winners: Number(d.gwin), cap: Number(d.gcap), end: d.gend || 'full', sponsors: d.spons || [], desc: d.desc || null,
+    photo: d.photo || null,
   };
 }
 
@@ -75,25 +76,40 @@ export async function loadGv(id) {
     endsAt: r.ends_at, winnersList: r.winners ? JSON.parse(r.winners) : null, count };
 }
 
-async function refreshPost(g) {
-  await call('editMessageText', { chat_id: g.chatId, message_id: g.msgId, text: await buildGv(g), parse_mode: 'HTML',
-    link_preview_options: { is_disabled: true }, reply_markup: { inline_keyboard: gvKb(g) } });
+// The post is a photo with the text as caption (asCaption), or a text message (with a photo above it, or none).
+async function editPost(g, kb = null) {
+  const rm = kb ? { reply_markup: { inline_keyboard: kb } } : {};
+  if (g.asCaption) return call('editMessageCaption', { chat_id: g.chatId, message_id: g.msgId, caption: await buildGv(g), parse_mode: 'HTML', ...rm });
+  return call('editMessageText', { chat_id: g.chatId, message_id: g.msgId, text: await buildGv(g), parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...rm });
+}
+const refreshPost = (g) => editPost(g, gvKb(g));
+
+/** The giveaway post: photo first, the text under it, the join button under that (a caption holds 1024 characters). */
+export async function sendGvPost(chatId, g) {
+  const text = await buildGv(g);
+  const kb = { reply_markup: { inline_keyboard: gvKb(g) } };
+  if (g.photo && text.length <= 1024) {
+    const r = await call('sendPhoto', { chat_id: chatId, photo: g.photo, caption: text, parse_mode: 'HTML', ...kb });
+    return { ...r, asCaption: true };
+  }
+  if (g.photo) await call('sendPhoto', { chat_id: chatId, photo: g.photo });
+  return call('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...kb });
 }
 
 /** Post a new giveaway in a channel -> [ok, error] */
 export async function openGiveaway(uid, chatId, d, pin) {
   const g = { ...gvMake(d), owner: uid, chatId, status: 'open', count: 0 };
   g.endsAt = calcEnd(g.end);
-  const data = { theme: g.theme, title: g.title, prize: g.prize, winners: g.winners, cap: g.cap, end: g.end, sponsors: g.sponsors, desc: g.desc };
+  const data = { theme: g.theme, title: g.title, prize: g.prize, winners: g.winners, cap: g.cap, end: g.end, sponsors: g.sponsors, desc: g.desc, photo: g.photo };
   const row = (await db.run(sql`INSERT INTO giveaways (owner, chat_id, data, status, ends_at, created)
     VALUES (${uid}, ${chatId}, ${JSON.stringify(data)}, 'open', ${g.endsAt}, ${now()}) RETURNING id`)).rows[0];
   g.id = row.id;
-  const r = await call('sendMessage', { chat_id: chatId, text: await buildGv(g), parse_mode: 'HTML',
-    link_preview_options: { is_disabled: true }, reply_markup: { inline_keyboard: gvKb(g) } });
+  const r = await sendGvPost(chatId, g);
   if (!r.ok) {
     await db.run(sql`DELETE FROM giveaways WHERE id = ${g.id}`);
     return [false, r.description];
   }
+  if (r.asCaption) await db.run(sql`UPDATE giveaways SET data = ${JSON.stringify({ ...data, asCaption: true })} WHERE id = ${g.id}`);
   await db.run(sql`UPDATE giveaways SET msg_id = ${r.result.message_id} WHERE id = ${g.id}`);
   if (pin) await call('pinChatMessage', { chat_id: chatId, message_id: r.result.message_id });
   return [true, g.id];
@@ -119,7 +135,7 @@ export async function drawGiveaway(gid) {
   const parts = (await db.all(sql`SELECT user_id AS id, name, un FROM entries WHERE gid = ${g.id} ORDER BY id`)).slice(0, g.cap);
   g.winnersList = sample(parts, Math.min(g.winners, parts.length));
   await db.run(sql`UPDATE giveaways SET winners = ${JSON.stringify(g.winnersList)} WHERE id = ${g.id}`);
-  await call('editMessageText', { chat_id: g.chatId, message_id: g.msgId, text: await buildGv(g), parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+  await editPost(g);
   const win = g.winnersList;
   const msg = win.length
     ? `🎊🏆 <b>نتیجه قرعه‌کشی</b> 🏆🎊\n\n🎁 <b>جایزه :</b>  ${esc(g.prize)}\n\n${winnersLines(g).join('\n')}\n\n` +
@@ -134,7 +150,7 @@ export async function drawGiveaway(gid) {
 export async function cancelGiveaway(g) {
   await db.run(sql`UPDATE giveaways SET status = 'cancel' WHERE id = ${g.id} AND status = 'open'`);
   g.status = 'cancel';
-  await call('editMessageText', { chat_id: g.chatId, message_id: g.msgId, text: await buildGv(g), parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+  await editPost(g);
 }
 
 /** The join button in the channel. */

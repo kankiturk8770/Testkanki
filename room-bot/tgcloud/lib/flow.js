@@ -6,7 +6,7 @@ import { esc, btn, grid, call, send, markup, now, digits } from './util.js';
 import { SETS, PRESETS, COLS, STYLES, RULES, RSHORT, REC, KIND_LABEL, SKIP, kbase } from './data.js';
 import * as store from './store.js';
 import { sendPost, sendBeauty, deliver } from './posts.js';
-import { gvMake, buildGv, gvKb } from './gv.js';
+import { gvMake, sendGvPost } from './gv.js';
 import { aiEnabled, writePost } from './ai.js';
 
 const steps = (s) => SETS[s.kind];
@@ -93,7 +93,7 @@ async function previewText(uid, s) {
   if (base === 'room') return sendPost(uid, s.d);
   if (base === 'post') return sendBeauty(uid, s.d);
   const g = { ...gvMake(s.d), id: 0, status: 'open', endsAt: null, count: 0 };
-  await send(uid, await buildGv(g), gvKb(g));
+  await sendGvPost(uid, g);
   await send(uid, '🍀 <i>پیش‌نمایش قرعه‌کشی: دکمه‌ی شرکت بعد از ارسال فعال میشه.</i>', false);
 }
 
@@ -109,11 +109,19 @@ export async function preview(uid, st) {
 
 // Filled by the AI: those steps are skipped, the optional ones it left empty too.
 const OPTIONAL = new Set(['room', 'desc', 'photo', 'pbtn']);
-const filled = (s, k) => s.d[k] !== undefined || (s.auto && (OPTIONAL.has(k) || (k === 'spons' && kbase(s.kind) === 'gv')));
+// a giveaway's photo is always asked
+const filled = (s, k) => s.d[k] !== undefined || (s.auto && ((OPTIONAL.has(k) && !(k === 'photo' && kbase(s.kind) === 'gv')) || (k === 'spons' && kbase(s.kind) === 'gv')));
 
 async function done(uid, st) {
   const s = st.s;
-  if (s.edit || (s.quick && s.i + 1 >= s.qn)) return preview(uid, st);
+  if (s.edit) return preview(uid, st);
+  if (s.quick && s.i + 1 >= s.qn) {
+    // quick giveaway: the few questions, then the photo, then the preview
+    const ph = s.keys.indexOf('photo');
+    if (ph < 0 || s.d.photo !== undefined || s.i === ph) return preview(uid, st);
+    s.i = ph;
+    return go(uid, st);
+  }
   s.i += 1;
   while (s.auto && s.i < s.keys.length && filled(s, s.keys[s.i])) s.i += 1;
   if (s.i >= s.keys.length) return preview(uid, st);
