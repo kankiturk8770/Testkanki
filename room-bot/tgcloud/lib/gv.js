@@ -89,7 +89,10 @@ async function buildBody(g) {
   }
   if (g.status === 'cancel') return [header(g), '', LINE, '', '⛔️ <b>این قرعه‌کشی لغو شد.</b>'].join('\n');
   // the admin's own text: as written, with the live counter under it
-  if (g.text) return `${esc(g.text)}\n\n📊 ${bar(n, g.cap)}  <b>${n}/${g.cap}</b>`;
+  if (g.text) {
+    const sp = g.sponsors?.length ? `\n\n📢 <b>عضویت در ${g.sponsors.map(esc).join(' و ')} الزامیه</b>\n(موقع اعلام برنده و تحویل جایزه دوباره چک میشه)` : '';
+    return `${esc(g.text)}${sp}\n\n📊 ${bar(n, g.cap)}  <b>${n}/${g.cap}</b>`;
+  }
   const L = [header(g), '', '🔥 <i>امروز قرعه‌کشی داریم! فقط با یه کلیک شرکت کن</i> 🔥', '', LINE, '',
     `🎁 <b>جایزه :</b>  ${esc(g.prize)}`, '',
     `🏆 <b>تعداد برنده :</b>  ${g.winners} نفر`, '',
