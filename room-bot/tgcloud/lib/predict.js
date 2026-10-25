@@ -75,6 +75,11 @@ async function record(g, from, A, B) {
  * pq:<gid>:a+|a-|b+|b-|ok — the ➕/➖ under the channel post. The buttons are the same for everyone, so each
  * person's score lives in pdrafts and shows in the little popup; "ok" makes it final.
  */
+// the score in a popup: a line per team that starts with its name, so right-to-left text can't swap the numbers
+// (an "a - b" line came out mixed up, and a line starting with an emoji was cut off)
+const faNum = (n) => String(n).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
+const score = (g, a, b) => `${g.match.a}: ${faNum(a)}\n${g.match.b}: ${faNum(b)}`;
+
 export async function channelPredict(c) {
   const [, gid, act] = c.data.split(':');
   const uid = c.from.id;
@@ -88,7 +93,7 @@ export async function channelPredict(c) {
   if (act === 'ok') {
     if (!(await record(g, c.from, cur.a, cur.b))) return toast(plain((await blocked(g, uid)) || '✅ ثبت شده.'), true);
     await db.run(sql`DELETE FROM pdrafts WHERE gid = ${g.id} AND user_id = ${uid}`);
-    return toast(`✅ پیش‌بینیت ثبت شد!\n\n${g.match.a}  ${cur.a} - ${cur.b}  ${g.match.b}\n\nقابل تغییر نیست. بعد از بازی نتیجه تو کانال اعلام میشه 🍀`, true);
+    return toast(`پیش‌بینیت ثبت شد ✅\n${score(g, cur.a, cur.b)}\nنتیجه بعد از بازی تو کانال اعلام میشه 🍀`, true);
   }
   const step = act.endsWith('+') ? 1 : act.endsWith('-') ? -1 : 0; // the team name itself just shows the score
   const a = act.startsWith('a') ? Math.min(MAX, Math.max(0, cur.a + step)) : cur.a;
@@ -96,7 +101,7 @@ export async function channelPredict(c) {
   await db.run(sql`INSERT INTO pdrafts (gid, user_id, a, b) VALUES (${g.id}, ${uid}, ${a}, ${b})
     ON CONFLICT(gid, user_id) DO UPDATE SET a = excluded.a, b = excluded.b`);
   // a popup in the middle of the screen: the small toast shows at the very top, far from the post, and is missed
-  return toast(`⚽️ پیش‌بینی تو:\n\n${g.match.a}  ${a}  -  ${b}  ${g.match.b}\n\n👈 آخرش «✅ ثبت نتیجه» رو بزن`, true);
+  return toast(`پیش‌بینی تو:\n${score(g, a, b)}\nآخرش «ثبت نتیجه» رو بزن ✅`, true);
 }
 
 // ---------- the result (owner) ----------
