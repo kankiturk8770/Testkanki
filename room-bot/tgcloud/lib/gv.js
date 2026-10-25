@@ -10,7 +10,7 @@ export function gvMake(d) {
     theme: d.theme, title: d.gtitle || '',
     prize: d.gprize || d.gprize_c || (d.glamt ? `${d.glamt} لایک ${d.glike}` : '-'),
     winners: Number(d.gwin), cap: Number(d.gcap), end: d.gend || 'full', sponsors: d.spons || [], desc: d.desc || null,
-    photo: d.photo || null,
+    photo: d.photo || null, text: d.gtext || null, btns: d.gbtns || [],
   };
 }
 
@@ -52,6 +52,8 @@ export async function buildGv(g) {
     return L.join('\n');
   }
   if (g.status === 'cancel') return [header(g), '', LINE, '', '⛔️ <b>این قرعه‌کشی لغو شد.</b>'].join('\n');
+  // the admin's own text: as written, with the live counter under it
+  if (g.text) return `${esc(g.text)}\n\n📊 ${bar(n, g.cap)}  <b>${n}/${g.cap}</b>`;
   const L = [header(g), '', '🔥 <i>امروز قرعه‌کشی داریم! فقط با یه کلیک شرکت کن</i> 🔥', '', LINE, '',
     `🎁 <b>جایزه :</b>  ${esc(g.prize)}`, '',
     `🏆 <b>تعداد برنده :</b>  ${g.winners} نفر`, '',
@@ -65,7 +67,9 @@ export async function buildGv(g) {
   return L.join('\n');
 }
 
-export const gvKb = (g) => [[btn(`🎯 شرکت در قرعه‌کشی 🍀  (${g.count}/${g.cap})`, `gj:${g.id}`)]];
+// the admin's link buttons stay under the post, also after the draw
+const linkRows = (g) => (g.btns || []).map((b) => [{ text: b.t, url: b.u }]);
+export const gvKb = (g) => [[btn(`🎯 شرکت در قرعه‌کشی 🍀  (${g.count}/${g.cap})`, `gj:${g.id}`)], ...linkRows(g)];
 
 /** Row + its entries -> the giveaway object used above. */
 export async function loadGv(id) {
@@ -100,7 +104,7 @@ export async function sendGvPost(chatId, g) {
 export async function openGiveaway(uid, chatId, d, pin) {
   const g = { ...gvMake(d), owner: uid, chatId, status: 'open', count: 0 };
   g.endsAt = calcEnd(g.end);
-  const data = { theme: g.theme, title: g.title, prize: g.prize, winners: g.winners, cap: g.cap, end: g.end, sponsors: g.sponsors, desc: g.desc, photo: g.photo };
+  const data = { theme: g.theme, title: g.title, prize: g.prize, winners: g.winners, cap: g.cap, end: g.end, sponsors: g.sponsors, desc: g.desc, photo: g.photo, text: g.text, btns: g.btns };
   const row = (await db.run(sql`INSERT INTO giveaways (owner, chat_id, data, status, ends_at, created)
     VALUES (${uid}, ${chatId}, ${JSON.stringify(data)}, 'open', ${g.endsAt}, ${now()}) RETURNING id`)).rows[0];
   g.id = row.id;
@@ -135,7 +139,7 @@ export async function drawGiveaway(gid) {
   const parts = (await db.all(sql`SELECT user_id AS id, name, un FROM entries WHERE gid = ${g.id} ORDER BY id`)).slice(0, g.cap);
   g.winnersList = sample(parts, Math.min(g.winners, parts.length));
   await db.run(sql`UPDATE giveaways SET winners = ${JSON.stringify(g.winnersList)} WHERE id = ${g.id}`);
-  await editPost(g);
+  await editPost(g, linkRows(g).length ? linkRows(g) : null);
   const win = g.winnersList;
   const msg = win.length
     ? `🎊🏆 <b>نتیجه قرعه‌کشی</b> 🏆🎊\n\n🎁 <b>جایزه :</b>  ${esc(g.prize)}\n\n${winnersLines(g).join('\n')}\n\n` +
@@ -150,7 +154,7 @@ export async function drawGiveaway(gid) {
 export async function cancelGiveaway(g) {
   await db.run(sql`UPDATE giveaways SET status = 'cancel' WHERE id = ${g.id} AND status = 'open'`);
   g.status = 'cancel';
-  await editPost(g);
+  await editPost(g, linkRows(g).length ? linkRows(g) : null);
 }
 
 /** The join button in the channel. */

@@ -203,6 +203,21 @@ export async function storeAnswer(uid, st, key, val) {
   } else if (key === 'pstyle') {
     if (!STYLES[val]) return send(uid, '🎨 یکی از دکمه‌ها رو بزن 👆', STEP_BACK);
     d.pstyle = val;
+  } else if (key === 'gbtns') {
+    const btns = [];
+    for (const line of val.split('\n').map((x) => x.trim()).filter(Boolean)) {
+      const i = line.indexOf('|');
+      const t = i > 0 ? line.slice(0, i).trim() : '';
+      let u = i > 0 ? line.slice(i + 1).trim() : '';
+      if (u.startsWith('@')) u = 'https://t.me/' + u.slice(1);
+      else if (/^t\.me\//.test(u)) u = 'https://' + u;
+      if (!t || !/^https?:\/\/\S+$/.test(u)) return send(uid, `⚠️ این خط درست نیست:\n${esc(line)}\n\nهر دکمه اینجوری: متن دکمه | لینک`, STEP_BACK);
+      btns.push({ t: t.slice(0, 60), u });
+    }
+    if (!btns.length) return send(uid, '⚠️ اینجوری بفرست:\nمتن دکمه | لینک', STEP_BACK);
+    d.gbtns = btns.slice(0, 8);
+  } else if (key === 'gtext') {
+    d.gtext = val.slice(0, 3500);
   } else if (key === 'pbtn') {
     if (!val.includes('|')) return send(uid, '⚠️ اینجوری بفرست:\nمتن دکمه | لینک', STEP_BACK);
     const i = val.indexOf('|');
