@@ -5,7 +5,7 @@ import { db } from 'sdk';
 import { sql } from 'sdk/db';
 import { esc, btn, call, send, now, digits } from './util.js';
 import { localStr } from './store.js';
-import { loadGv, predictOpen, refreshAny } from './gv.js';
+import { loadGv, predictOpen, refreshAny, drawGiveaway, pickMembers, isMember, shown, winnersLines, claimRow, footer } from './gv.js';
 
 const MAX = 15;
 const scoreKb = (g, a, b) => [
@@ -98,28 +98,88 @@ export async function channelPredict(c) {
   return toast(`پیش‌بینی تو:  ${g.match.a} ${a}  -  ${b} ${g.match.b}\n👈 آخرش «✅ ثبت نتیجه» رو بزن`);
 }
 
-const mention = (p) => `<a href="tg://user?id=${p.user_id}">${esc(p.name || 'کاربر')}</a>` + (p.un ? ` (@${esc(p.un)})` : '');
+// ---------- the result (owner) ----------
+const resKb = (g, a, b) => [
+  [btn('➕', `rp:${g.id}:${Math.min(MAX, a + 1)}:${b}`), btn(`${g.match.a}: ${a}`, 'noop'), btn('➖', `rp:${g.id}:${Math.max(0, a - 1)}:${b}`)],
+  [btn('➕', `rp:${g.id}:${a}:${Math.min(MAX, b + 1)}`), btn(`${g.match.b}: ${b}`, 'noop'), btn('➖', `rp:${g.id}:${a}:${Math.max(0, b - 1)}`)],
+  [btn(`✅ نتیجه: ${g.match.a} ${a} - ${b} ${g.match.b}`, `rk:${g.id}:${a}:${b}`)],
+  [btn('🔙 برگشت', 'gvl')],
+];
 
-/** The owner typed the final score ("2-1") for giveaway gid. */
+/** mr:<gid> and rp:… — the owner sets the final score with ➕/➖ (no typing, no "which number is which team"). */
+export async function resultPicker(uid, gid, a = 0, b = 0, msgId = null) {
+  const g = await loadGv(gid);
+  if (!g || g.owner !== uid || !g.match || g.match.result) return send(uid, '⌛️ این بازی دیگه منتظر نتیجه نیست.');
+  const text = `🏁 <b>نتیجه‌ی ${esc(g.match.a)} 🆚 ${esc(g.match.b)}</b>\n\n${esc(g.match.a)}  <b>${a}</b>  -  <b>${b}</b>  ${esc(g.match.b)}\n\n` +
+    `با ➕/➖ گل‌های هر تیم رو بذار و «✅ نتیجه» رو بزن.\n👥 ${g.pcount} نفر پیش‌بینی کردن.`;
+  if (msgId) return call('editMessageText', { chat_id: uid, message_id: msgId, text, parse_mode: 'HTML', reply_markup: { inline_keyboard: resKb(g, a, b) } });
+  return send(uid, text, resKb(g, a, b));
+}
+
+/** rk:… asks once more, ry:… announces. */
+export async function resultConfirm(uid, gid, a, b, msgId) {
+  const g = await loadGv(gid);
+  if (!g || g.owner !== uid || !g.match || g.match.result) return send(uid, '⌛️ این بازی دیگه منتظر نتیجه نیست.');
+  return call('editMessageText', { chat_id: uid, message_id: msgId, parse_mode: 'HTML',
+    text: `❓ <b>مطمئنی؟</b>\n\n${esc(g.match.a)}  <b>${a} - ${b}</b>  ${esc(g.match.b)}\n\nبا تأیید، نتیجه و برنده‌ها تو کانال اعلام میشن و دیگه برنمی‌گرده.`,
+    reply_markup: { inline_keyboard: [[btn('✅ آره، اعلام کن', `ry:${gid}:${a}:${b}`)], [btn('🔙 نه، درستش کنم', `rp:${gid}:${a}:${b}`)]] } });
+}
+
+/** Typed result still works: "2-1" = first team 2, second team 1. */
 export async function setResult(uid, gid, text) {
   const m = digits(text).match(/(\d{1,2})\s*[-:–]\s*(\d{1,2})/);
   if (!m) return send(uid, '⚠️ نتیجه رو اینجوری بفرست: <code>2-1</code> (اول گل‌های تیم اول)');
-  const g = await loadGv(gid);
+  return announceResult(uid, gid, Number(m[1]), Number(m[2]));
+}
+
+/**
+ * The final score: the first exact prediction by someone still in the channel and the sponsors wins the
+ * prediction prize; nobody exact = one more random winner in the draw. The draw happens now if it waited
+ * for the result. One results post in the channel.
+ */
+export async function announceResult(uid, gid, x, y) {
+  let g = await loadGv(gid);
   if (!g || g.owner !== uid || !g.match || g.match.result) return send(uid, '⌛️ این بازی دیگه منتظر نتیجه نیست.');
-  const x = Number(m[1]), y = Number(m[2]);
-  g.match.result = [x, y];
-  const r = await db.get(sql`SELECT data FROM giveaways WHERE id = ${g.id}`);
-  await db.run(sql`UPDATE giveaways SET data = ${JSON.stringify({ ...JSON.parse(r.data), match: g.match })} WHERE id = ${g.id}`);
-  const right = await db.all(sql`SELECT * FROM predictions WHERE gid = ${g.id} AND a = ${x} AND b = ${y} ORDER BY ts, id`);
-  const score = `${esc(g.match.a)} <b>${x} - ${y}</b> ${esc(g.match.b)}`;
-  const text2 = right.length
-    ? `🏁 <b>نتیجه‌ی بازی:</b> ${score}\n\n🥇 <b>اولین پیش‌بینی دقیق:</b> ${mention(right[0])}\n` +
-      (right.length > 1 ? `\n✅ بقیه‌ی پیش‌بینی‌های دقیق (${right.length - 1}):\n${right.slice(1, 11).map(mention).join('\n')}${right.length > 11 ? '\n…' : ''}\n` : '') +
-      `\n🎉 تبریک! برای دریافت جایزه به ادمین پیام بده.\n👥 کل پیش‌بینی‌ها: ${g.pcount}`
-    : `🏁 <b>نتیجه‌ی بازی:</b> ${score}\n\n😔 هیچ‌کس نتیجه‌ی دقیق رو پیش‌بینی نکرد.\n👥 کل پیش‌بینی‌ها: ${g.pcount}`;
+  // claim the result first: a double tap must not announce twice
+  const raw = JSON.parse((await db.get(sql`SELECT data FROM giveaways WHERE id = ${g.id}`)).data);
+  if (raw.match.result) return;
+  raw.match.result = [x, y];
+  const upd = (await db.run(sql`UPDATE giveaways SET data = ${JSON.stringify(raw)} WHERE id = ${g.id} AND data NOT LIKE ${'%"result":[%'} RETURNING id`)).rows[0];
+  if (!upd) return;
+  g.match = raw.match;
+
+  let pred = null;
+  for (const p of await db.all(sql`SELECT * FROM predictions WHERE gid = ${g.id} AND a = ${x} AND b = ${y} ORDER BY ts, id`)) {
+    if (await isMember(g, p.user_id)) {
+      pred = { id: p.user_id, name: p.name, un: p.un };
+      break;
+    }
+  }
+  const extra = pred ? 0 : 1;
+  if (g.status === 'open') g = (await drawGiveaway(g.id, { extra, announce: false })) || g;
+  else if (extra && g.status === 'done') {
+    const have = new Set((g.winnersList || []).map((w) => w.id));
+    const rest = (await db.all(sql`SELECT user_id AS id, name, un FROM entries WHERE gid = ${g.id} ORDER BY id`)).filter((p) => !have.has(p.id));
+    g.winnersList = [...(g.winnersList || []), ...(await pickMembers(g, rest, 1))];
+    await db.run(sql`UPDATE giveaways SET winners = ${JSON.stringify(g.winnersList)} WHERE id = ${g.id}`);
+  }
+  g.match = { ...raw.match, winner: pred };
+  const cur = JSON.parse((await db.get(sql`SELECT data FROM giveaways WHERE id = ${g.id}`)).data);
+  await db.run(sql`UPDATE giveaways SET data = ${JSON.stringify({ ...cur, match: g.match })} WHERE id = ${g.id}`);
+
+  const predPrize = g.vpn?.pred?.label || 'جایزه‌ی پیش‌بینی';
+  const drawPrize = g.vpn?.draw?.label || g.prize;
+  const L = [`🏁 <b>نتیجه‌ی نهایی</b>`, '', `⚽️ ${esc(g.match.a)}  <b>${x} - ${y}</b>  ${esc(g.match.b)}`, ''];
+  if (pred) L.push(`🥇 <b>برنده‌ی پیش‌بینی دقیق</b> (${esc(predPrize)}):`, `👤 ${shown(pred)}`, '');
+  else L.push('😔 هیچ‌کس نتیجه رو دقیق پیش‌بینی نکرد؛', `🎁 جایزه‌ی پیش‌بینی به قرعه‌کشی اضافه شد و برنده‌ها <b>${(g.winnersList || []).length} نفر</b> شدن!`, '');
+  if ((g.winnersList || []).length) L.push(`🎉 <b>برنده‌های قرعه‌کشی</b> (${esc(drawPrize)}):`, ...winnersLines(g), '');
+  else L.push('😔 کسی تو قرعه‌کشی شرکت نکرده بود.', '');
+  L.push('⚠️ جایزه فقط به کسایی می‌رسه که عضو کانال و اسپانسرها باشن.');
+  const any = pred || (g.winnersList || []).length;
+  if (any && g.vpn) L.push('👇 برنده‌ها جایزه‌شون رو از دکمه‌ی زیر بگیرن.');
+  const text2 = L.join('\n') + (await footer());
   await call('sendMessage', { chat_id: g.chatId, text: text2, parse_mode: 'HTML', link_preview_options: { is_disabled: true },
-    reply_parameters: { message_id: g.msgId, allow_sending_without_reply: true } });
-  await refreshAny(g); // result under the post, the predict button gone
-  if (right[0]) await send(right[0].user_id, `🎉🥇 <b>تبریک!</b>\n\nتو اولین نفری بودی که نتیجه‌ی ${score} رو دقیق پیش‌بینی کردی!\nبرای دریافت جایزه به ادمین کانال پیام بده.`);
-  return send(uid, `✅ نتیجه ثبت و تو کانال اعلام شد.\n\n${text2}`, [[btn('📋 قرعه‌کشی‌های من', 'gvl')], [btn('🏠 منو', 'menu')]]);
+    reply_parameters: { message_id: g.msgId, allow_sending_without_reply: true }, ...(any && g.vpn ? { reply_markup: { inline_keyboard: claimRow(g) } } : {}) });
+  await refreshAny(g); // the post: result line, no more ➕/➖
+  return send(uid, `✅ نتیجه و برنده‌ها تو کانال اعلام شد.\n\n${text2}`, [[btn('📋 قرعه‌کشی‌های من', 'gvl')], [btn('🏠 منو', 'menu')]]);
 }

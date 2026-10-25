@@ -8,7 +8,7 @@ import { AI_PROMPT } from '../lib/aiflow.js';
 import { welcome, HELP, startSession, showJobs, showChannels, showStats, addHelp, menuKb, sessionCallback } from '../lib/flow.js';
 import { gvJoin, gvMenu, showGvs, loadGv, drawGiveaway, cancelGiveaway, templates } from '../lib/gv.js';
 import { autoPanel, autoAction, draftAction } from '../lib/autopost.js';
-import { predictCallback, channelPredict } from '../lib/predict.js';
+import { predictCallback, channelPredict, resultPicker, resultConfirm, announceResult } from '../lib/predict.js';
 
 export default async function (c) {
   const data = c.data || '';
@@ -48,17 +48,20 @@ async function handle(c, uid, st, data) {
   if (data.startsWith('gvt:')) {
     const t = (await store.isOwner(uid)) && (await templates())[Number(data.slice(4))];
     if (!t) return gvMenu(uid);
-    return startSession(uid, st, t.kind, { prefill: t.d });
+    return startSession(uid, st, t.kind, { prefill: t.d, tpl: true });
   }
   if (data === 'gvl') {
     st.w = null; // back from "type the result"
     return showGvs(uid);
   }
-  if (data.startsWith('mr:')) {
-    const g = await loadGv(data.slice(3));
-    if (!g || g.owner !== uid || !g.match || g.match.result) return send(uid, '⌛️ این بازی دیگه منتظر نتیجه نیست.');
-    st.w = `res:${g.id}`;
-    return send(uid, `⚽️ <b>نتیجه‌ی ${g.match.a} 🆚 ${g.match.b}</b> رو بفرست:\n\nاول گل‌های ${g.match.a}، مثلا <code>2-1</code>\n\n(${g.pcount} نفر پیش‌بینی کردن)`, [[btn('🔙 برگشت', 'gvl')]]);
+  // the match result: ➕/➖ per team, then confirm (owner only; checked inside)
+  if (data.startsWith('mr:')) return resultPicker(uid, Number(data.slice(3)));
+  if (/^r[pky]:\d+:\d+:\d+$/.test(data)) {
+    const [act, gid, a, b] = data.split(':');
+    if (act === 'rp') return resultPicker(uid, Number(gid), Number(a), Number(b), mid);
+    if (act === 'rk') return resultConfirm(uid, Number(gid), Number(a), Number(b), mid);
+    await call('editMessageReplyMarkup', { chat_id: uid, message_id: mid, reply_markup: { inline_keyboard: [] } });
+    return announceResult(uid, Number(gid), Number(a), Number(b));
   }
   if (data === 'noop') return;
   if (data === 'auto' || /^(au|ap|ar|ax):/.test(data)) {

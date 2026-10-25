@@ -9,10 +9,11 @@ import {
 } from '../lib/flow.js';
 import { gvMenu } from '../lib/gv.js';
 import { predictStart, setResult } from '../lib/predict.js';
+import { claimStart } from '../lib/claim.js';
 import { autoPanel, setTimes, setSources, setCreators } from '../lib/autopost.js';
 
 // Settings the owner can set from the chat (keys never go in the code).
-const SETTABLE = { gemini_key: 'کلید Gemini' };
+const SETTABLE = { gemini_key: 'کلید Gemini', results_footer: 'متن زیر پست نتیجه‌ها', vpn_bot: 'آیدی ربات VPN' };
 const WEBAPP = 'https://app8719466331.tgcloud.ai/';
 
 const fwdChat = (m) => m.forward_from_chat || m.forward_origin?.chat || null;
@@ -20,6 +21,7 @@ const fwdChat = (m) => m.forward_from_chat || m.forward_origin?.chat || null;
 async function command(m, uid, st, cmd, arg, rest) {
   st.w = null;
   if (cmd === '/start' && /^pr_\d+$/.test(arg)) return predictStart(uid, Number(arg.slice(3))); // from a channel post
+  if (cmd === '/start' && /^cl_\d+$/.test(arg)) return claimStart(uid, Number(arg.slice(3))); // a winner's prize
   if (cmd === '/start' || cmd === '/menu') return welcome(uid, m.from?.first_name || '');
   if (cmd === '/help') return send(uid, HELP, [[btn('🏠 منو', 'menu')]]);
   if (cmd === '/new') return startSession(uid, st, 'room');

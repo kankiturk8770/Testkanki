@@ -10,7 +10,7 @@ export function gvMake(d) {
     theme: d.theme, title: d.gtitle || '',
     prize: d.gprize || d.gprize_c || (d.glamt ? `${d.glamt} لایک ${d.glike}` : '-'),
     winners: Number(d.gwin), cap: Number(d.gcap), end: d.gend || 'full', sponsors: d.spons || [], desc: d.desc || null,
-    photo: d.photo || null, text: d.gtext || null, btns: d.gbtns || [], match: d.gmatch || null,
+    photo: d.photo || null, text: d.gtext || null, btns: d.gbtns || [], match: d.gmatch || null, vpn: d.vpn || null,
   };
 }
 
@@ -28,6 +28,7 @@ const header = (g) => g.theme === 'uc' ? '🎁💰 <b>قرعه‌کشی ویژه
     : `🎉🎁 <b>${esc(g.title || 'قرعه‌کشی ویژه')}</b> 🎁🎉`;
 
 async function whenTxt(g) {
+  if (g.end === 'result') return '🏁 بعد از اعلام نتیجه‌ی بازی';
   if (g.endsAt) return `⏰ ${await localStr(g.endsAt)} (یا زودتر با پر شدن ظرفیت)`;
   if (g.end.startsWith('d:')) return `⏱ ${Number(g.end.slice(2))} دقیقه بعد از ارسال (یا زودتر با پر شدن ظرفیت)`;
   return '✅ بلافاصله بعد از پر شدن ظرفیت';
@@ -38,9 +39,30 @@ function bar(n, cap) {
   return '▰'.repeat(k) + '▱'.repeat(10 - k);
 }
 
-const mention = (p) => `<a href="tg://user?id=${p.id}">${esc(p.name || 'کاربر')}</a>` + (p.un ? ` (@${esc(p.un)})` : '');
-const MEDALS = ['🥇', '🥈', '🥉'];
-const winnersLines = (g) => (g.winnersList || []).map((p, i) => `${MEDALS[i] || '🏅'} ${mention(p)}`);
+// Winners are shown by name only: no link, no @, so nobody can find and bother them.
+// Without a name, the username without "@" (plain text, not clickable).
+export const shown = (p) => esc((p.name || '').trim() || (p.un || '').replace(/^@/, '') || 'کاربر');
+const NUM = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+export const winnersLines = (g) => (g.winnersList || []).map((p, i) => `${NUM[i] || '🏅'} ${shown(p)}`);
+
+/** Still a member of the giveaway's channel and every sponsor? (checked again when prizes are given) */
+export async function isMember(g, uid) {
+  for (const chat of [g.chatId, ...(g.sponsors || [])]) {
+    const r = await call('getChatMember', { chat_id: chat, user_id: uid });
+    if (r.ok && ['left', 'kicked'].includes(r.result.status)) return false;
+  }
+  return true;
+}
+
+/** k random members out of the list (non-members are skipped). */
+export async function pickMembers(g, list, k) {
+  const out = [];
+  for (const p of sample(list, list.length)) {
+    if (out.length >= k) break;
+    if (await isMember(g, p.id)) out.push(p);
+  }
+  return out;
+}
 
 export async function buildGv(g) {
   return (await buildBody(g)) + (g.status === 'cancel' ? '' : await matchLines(g));
@@ -95,6 +117,8 @@ const linkRows = (g) => [
   ...(predictOpen(g) ? predictRows(g) : []),
   ...(g.btns || []).map((b) => [{ text: b.t, url: b.u }]),
 ];
+// under the results: winners open the bot and get their personal prize link (lib/claim.js)
+export const claimRow = (g) => (g.vpn && g.bot ? [[styled({ text: '🎁 دریافت جایزه (مخصوص برنده‌ها)', url: `https://t.me/${g.bot}?start=cl_${g.id}` }, 'success')]] : []);
 
 export async function botName() {
   let n = await getSetting('bot_username');
@@ -144,7 +168,7 @@ export async function sendGvPost(chatId, g) {
 export async function openGiveaway(uid, chatId, d, pin) {
   const g = { ...gvMake(d), owner: uid, chatId, status: 'open', count: 0 };
   g.endsAt = calcEnd(g.end);
-  const data = { theme: g.theme, title: g.title, prize: g.prize, winners: g.winners, cap: g.cap, end: g.end, sponsors: g.sponsors, desc: g.desc, photo: g.photo, text: g.text, btns: g.btns, match: g.match };
+  const data = { theme: g.theme, title: g.title, prize: g.prize, winners: g.winners, cap: g.cap, end: g.end, sponsors: g.sponsors, desc: g.desc, photo: g.photo, text: g.text, btns: g.btns, match: g.match, vpn: g.vpn };
   const row = (await db.run(sql`INSERT INTO giveaways (owner, chat_id, data, status, ends_at, created)
     VALUES (${uid}, ${chatId}, ${JSON.stringify(data)}, 'open', ${g.endsAt}, ${now()}) RETURNING id`)).rows[0];
   g.id = row.id;
@@ -171,24 +195,36 @@ function sample(list, k) {
   return a.slice(0, k);
 }
 
-export async function drawGiveaway(gid) {
+/**
+ * The random draw. extra: more winners than planned (nobody predicted the match exactly).
+ * announce: false when the match result is announced together with it (lib/predict.js).
+ */
+export async function drawGiveaway(gid, { extra = 0, announce = true } = {}) {
   // only one caller wins the "open -> done" switch
   const won = (await db.run(sql`UPDATE giveaways SET status = 'done' WHERE id = ${Number(gid)} AND status = 'open' RETURNING id`)).rows[0];
-  if (!won) return;
+  if (!won) return null;
   const g = await loadGv(gid);
   const parts = (await db.all(sql`SELECT user_id AS id, name, un FROM entries WHERE gid = ${g.id} ORDER BY id`)).slice(0, g.cap);
-  g.winnersList = sample(parts, Math.min(g.winners, parts.length));
+  g.winnersList = await pickMembers(g, parts, Math.min(g.winners + extra, parts.length));
   await db.run(sql`UPDATE giveaways SET winners = ${JSON.stringify(g.winnersList)} WHERE id = ${g.id}`);
   await editPost(g, linkRows(g).length ? linkRows(g) : null);
+  if (!announce) return g;
   const win = g.winnersList;
   const msg = win.length
     ? `🎊🏆 <b>نتیجه قرعه‌کشی</b> 🏆🎊\n\n🎁 <b>جایزه :</b>  ${esc(g.prize)}\n\n${winnersLines(g).join('\n')}\n\n` +
-      '🎉 <b>تبریک به برنده‌ها!</b>\n📩 برای دریافت جایزه به ادمین پیام بدید.\n\n🍀 ممنون از همه‌ی شرکت‌کننده‌ها'
+      `🎉 <b>تبریک به برنده‌ها!</b>\n${g.vpn ? '👇 جایزه‌تون رو از دکمه‌ی زیر بگیرید.' : '📩 برای دریافت جایزه به ادمین پیام بدید.'}\n\n🍀 ممنون از همه‌ی شرکت‌کننده‌ها` + (await footer())
     : '😔 <b>قرعه‌کشی تموم شد ولی کسی شرکت نکرده بود.</b>';
   await call('sendMessage', { chat_id: g.chatId, text: msg, parse_mode: 'HTML', link_preview_options: { is_disabled: true },
-    reply_parameters: { message_id: g.msgId, allow_sending_without_reply: true } });
-  for (const p of win) await send(p.id, `🎉🏆 <b>تبریک!</b>\n\nتو برنده‌ی قرعه‌کشی «${esc(g.prize)}» شدی 🎁\nبرای دریافت جایزه به ادمین کانال پیام بده.`);
+    reply_parameters: { message_id: g.msgId, allow_sending_without_reply: true }, ...(win.length && g.vpn ? { reply_markup: { inline_keyboard: claimRow(g) } } : {}) });
+  for (const p of win) await send(p.id, `🎉🏆 <b>تبریک!</b>\n\nتو برنده‌ی قرعه‌کشی «${esc(g.prize)}» شدی 🎁\n${g.vpn ? 'از دکمه‌ی «دریافت جایزه» زیر پست نتیجه، جایزه‌ت رو بگیر.' : 'برای دریافت جایزه به ادمین کانال پیام بده.'}`);
   await send(g.owner, `🎲 <b>قرعه‌کشی #${g.id} تموم شد</b>\n\n👥 شرکت‌کننده: ${g.count}\n🏆 برنده‌ها:\n${winnersLines(g).join('\n') || '—'}`, [[btn('🏠 منو', 'menu')]]);
+  return g;
+}
+
+/** Line under results posts (free VPN test), set with /set results_footer … */
+export async function footer() {
+  const f = await getSetting('results_footer');
+  return f ? `\n\n${f}` : '';
 }
 
 export async function cancelGiveaway(g) {
@@ -206,7 +242,7 @@ export async function gvJoin(c) {
   if (c.from.is_bot) return ans('');
   for (const sp of g.sponsors) {
     const r = await call('getChatMember', { chat_id: sp, user_id: uid });
-    if (r.ok && ['left', 'kicked'].includes(r.result.status)) return ans(`📢 اول باید عضو ${sp} بشی، بعد دوباره دکمه رو بزن.`);
+    if (r.ok && ['left', 'kicked'].includes(r.result.status)) return ans(`📢 اول باید عضو ${sp} بشی، بعد دوباره دکمه رو بزن.\n⚠️ تا آخر هم عضو بمون، وگرنه جایزه تعلق نمی‌گیره.`);
   }
   if (await db.get(sql`SELECT id FROM entries WHERE gid = ${g.id} AND user_id = ${uid}`)) return ans('✅ قبلا ثبت‌نام کردی! منتظر نتیجه باش 🍀');
   if (g.count >= g.cap) return ans('⛔️ ظرفیت پر شده یا قرعه‌کشی تموم شده.');
@@ -221,7 +257,8 @@ export async function gvJoin(c) {
     return ans('⛔️ ظرفیت پر شده یا قرعه‌کشی تموم شده.');
   }
   await ans('🎉 ثبت‌نامت انجام شد!\nموفق باشی 🍀');
-  if (rank >= g.cap) return drawGiveaway(g.id);
+  // full: draw now, unless the draw waits for the match result
+  if (rank >= g.cap && g.end !== 'result') return drawGiveaway(g.id);
   g.count = (await db.get(sql`SELECT COUNT(*) AS n FROM entries WHERE gid = ${g.id}`)).n;
   return refreshPost(g);
 }

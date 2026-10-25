@@ -110,7 +110,9 @@ export async function preview(uid, st) {
 // Filled by the AI: those steps are skipped, the optional ones it left empty too.
 const OPTIONAL = new Set(['room', 'desc', 'photo', 'pbtn']);
 // a giveaway's photo is always asked
-const filled = (s, k) => s.d[k] !== undefined || (s.auto && ((OPTIONAL.has(k) && !(k === 'photo' && kbase(s.kind) === 'gv')) || (k === 'spons' && kbase(s.kind) === 'gv')));
+// steps that don't apply: the prediction deadline without a match
+const skip = (s, k) => k === 'gmuntil' && !s.d.gmatch;
+const filled = (s, k) => s.d[k] !== undefined || (s.auto && ((OPTIONAL.has(k) && !(k === 'photo' && kbase(s.kind) === 'gv')) || (k === 'spons' && kbase(s.kind) === 'gv' && !s.tpl)));
 
 async function done(uid, st) {
   const s = st.s;
@@ -123,12 +125,12 @@ async function done(uid, st) {
     return go(uid, st);
   }
   s.i += 1;
-  while (s.auto && s.i < s.keys.length && filled(s, s.keys[s.i])) s.i += 1;
+  while (s.i < s.keys.length && (skip(s, s.keys[s.i]) || (s.auto && filled(s, s.keys[s.i])))) s.i += 1;
   if (s.i >= s.keys.length) return preview(uid, st);
   return go(uid, st);
 }
 
-export async function startSession(uid, st, kind, { quick = false, prefill = null } = {}) {
+export async function startSession(uid, st, kind, { quick = false, prefill = null, tpl = false } = {}) {
   const u = await store.user(uid);
   if (!u.channels.length) {
     st.w = 'addch';
@@ -142,10 +144,10 @@ export async function startSession(uid, st, kind, { quick = false, prefill = nul
   const sel = kbase(kind) === 'gv' ? [String(u.channels[0].id)] : u.channels.map((c) => String(c.id));
   st.w = null;
   st.s = { kind, keys: SETS[kind].map((x) => x[0]), i: 0, d, edit: null, pin: !!u.pin, ctl: null, sel, mode: null,
-    quick, qn: kind === 'gv_chicken' ? 2 : 1, rsel: [], rcustom: [], auto: !!prefill };
+    quick, qn: kind === 'gv_chicken' ? 2 : 1, rsel: [], rcustom: [], auto: !!prefill, tpl };
   if (prefill) {
     const s = st.s;
-    while (s.i < s.keys.length && filled(s, s.keys[s.i])) s.i += 1;
+    while (s.i < s.keys.length && (filled(s, s.keys[s.i]) || skip(s, s.keys[s.i]))) s.i += 1;
     if (s.i >= s.keys.length) return preview(uid, st);
   }
   return go(uid, st);
@@ -194,9 +196,9 @@ export async function storeAnswer(uid, st, key, val) {
     if (key === 'gcap' && d.gwin && n < d.gwin) return send(uid, '⚠️ ظرفیت نمیتونه از تعداد برنده‌ها کمتر باشه.', STEP_BACK);
     d[key] = n;
   } else if (key === 'gend') {
-    if (val === 'full' || /^d:\d+$/.test(val) || /^at:\d+$/.test(val)) d.gend = val;
+    if (val === 'full' || val === 'result' || /^d:\d+$/.test(val) || /^at:\d+$/.test(val)) d.gend = val;
     else {
-      const ts = await parseWhen(val);
+      const ts = await parseWhen(val.replace(/^clk:/, ''));
       if (!ts) return send(uid, '⚠️ ساعت رو اینجوری بفرست: 23:30', STEP_BACK);
       d.gend = `at:${ts}`;
     }
@@ -219,13 +221,23 @@ export async function storeAnswer(uid, st, key, val) {
   } else if (key === 'gmatch') {
     const [teams, when] = val.split('|').map((x) => x.trim());
     const ab = teams.split(/\s+(?:-|–|—|🆚|vs\.?|و)\s+|\s*🆚\s*/i).map((x) => x.trim()).filter(Boolean);
-    if (ab.length !== 2) return send(uid, '⚠️ اسم دو تیم رو اینجوری بفرست:\n<code>رئال مادرید - بارسلونا | 22:30</code>', STEP_BACK);
-    let until = null;
-    if (when) {
+    if (ab.length !== 2) return send(uid, '⚠️ اسم دو تیم رو اینجوری بفرست:\n<code>رئال مادرید - بارسلونا</code>', STEP_BACK);
+    let until = d.gmatch?.until ?? null;
+    if (when) { // "teams | 22:30" in one go still works
       until = await parseWhen(when);
       if (!until) return send(uid, '⚠️ مهلت رو اینجوری بنویس: 22:30', STEP_BACK);
+      d.gmuntil = when;
     }
     d.gmatch = { a: ab[0].slice(0, 30), b: ab[1].slice(0, 30), until, result: null };
+  } else if (key === 'gmuntil') {
+    if (!d.gmatch) return send(uid, '⚠️ اول اسم تیم‌ها رو تو مرحله‌ی «پیش‌بینی» بده.', STEP_BACK);
+    let until = null;
+    if (val !== 'none') {
+      until = await parseWhen(val.replace(/^clk:/, ''));
+      if (!until) return send(uid, '⚠️ ساعت رو اینجوری بفرست: 22:30', STEP_BACK);
+    }
+    d.gmatch = { ...d.gmatch, until };
+    d.gmuntil = val;
   } else if (key === 'gtext') {
     d.gtext = val.slice(0, 3500);
   } else if (key === 'pbtn') {
@@ -369,7 +381,7 @@ export async function sessionCallback(uid, st, data, mid) {
   }
   if (data === 'back' && s.i > 0) {
     s.i -= 1;
-    while (s.auto && s.i > 0 && filled(s, s.keys[s.i]) && s.d[s.keys[s.i]] === undefined) s.i -= 1;
+    while (s.i > 0 && (skip(s, s.keys[s.i]) || (s.auto && filled(s, s.keys[s.i]) && s.d[s.keys[s.i]] === undefined))) s.i -= 1;
     return go(uid, st);
   }
   if (data === 'pv') return preview(uid, st);
