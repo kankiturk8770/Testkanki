@@ -114,7 +114,8 @@ const styled = (b, style) => ({ ...b, style }); // green / red / blue buttons
 const predictRows = (g) => [
   [styled(btn('➕', `pq:${g.id}:a+`), 'success'), btn(`⚽️ ${g.match.a}`, `pq:${g.id}:a`), styled(btn('➖', `pq:${g.id}:a-`), 'danger')],
   [styled(btn('➕', `pq:${g.id}:b+`), 'success'), btn(`⚽️ ${g.match.b}`, `pq:${g.id}:b`), styled(btn('➖', `pq:${g.id}:b-`), 'danger')],
-  [styled(btn('✅ ثبت نتیجه', `pq:${g.id}:ok`), 'primary')],
+  // one button does both: the prediction is the way into the draw (a separate join button was missed)
+  [styled(btn(`✅ ثبت نتیجه و شرکت در قرعه‌کشی  (${g.count}/${g.cap})`, `pq:${g.id}:ok`), 'primary')],
 ];
 const linkRows = (g) => [
   ...(predictOpen(g) ? predictRows(g) : []),
@@ -132,7 +133,11 @@ export async function botName() {
   }
   return n;
 }
-export const gvKb = (g) => [[styled(btn(`🎯 شرکت در قرعه‌کشی 🍀  (${g.count}/${g.cap})`, `gj:${g.id}`), 'success')], ...linkRows(g)];
+// a match giveaway has no join button: predicting is joining (its ✅ button carries the count); after the
+// prediction deadline only the count stays
+const joinRow = (g) => !g.match ? [styled(btn(`🎯 شرکت در قرعه‌کشی 🍀  (${g.count}/${g.cap})`, `gj:${g.id}`), 'success')]
+  : predictOpen(g) ? null : [btn(`⏰ مهلت ثبت تموم شد · ${g.count}/${g.cap} نفر`, 'noop')];
+export const gvKb = (g) => [joinRow(g), ...linkRows(g)].filter(Boolean);
 
 /** Row + its entries -> the giveaway object used above. */
 export async function loadGv(id) {

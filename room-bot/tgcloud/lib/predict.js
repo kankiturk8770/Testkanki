@@ -85,8 +85,8 @@ async function record(g, from, A, B) {
 // the score in a popup: a line per team that starts with its name, so right-to-left text can't swap the numbers
 // (an "a - b" line came out mixed up, and a line starting with an emoji was cut off)
 const faNum = (n) => String(n).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
-const joinedLine = (join) => ({ ok: 'تو قرعه‌کشی هم خودکار ثبت‌نام شدی 🎟', last: 'تو قرعه‌کشی هم خودکار ثبت‌نام شدی 🎟',
-  dup: 'تو قرعه‌کشی هم ثبت‌نامی 🎟', full: 'ظرفیت قرعه‌کشی پر بود، ولی پیش‌بینیت حساب میشه 🍀' })[join];
+const joinedLine = (join) => ({ ok: 'تو قرعه‌کشی هم ثبت شدی 🎟', last: 'تو قرعه‌کشی هم ثبت شدی 🎟',
+  dup: 'تو قرعه‌کشی هم ثبت شدی 🎟', full: 'ظرفیت قرعه‌کشی پر بود، ولی پیش‌بینیت حساب میشه 🍀' })[join];
 const score = (g, a, b) => `${g.match.a}: ${faNum(a)}\n${g.match.b}: ${faNum(b)}`;
 
 export async function channelPredict(c) {
@@ -111,7 +111,7 @@ export async function channelPredict(c) {
   await db.run(sql`INSERT INTO pdrafts (gid, user_id, a, b) VALUES (${g.id}, ${uid}, ${a}, ${b})
     ON CONFLICT(gid, user_id) DO UPDATE SET a = excluded.a, b = excluded.b`);
   // a popup in the middle of the screen: the small toast shows at the very top, far from the post, and is missed
-  return toast(`پیش‌بینی تو:\n${score(g, a, b)}\nآخرش «ثبت نتیجه» رو بزن ✅`, true);
+  return toast(`پیش‌بینی تو:\n${score(g, a, b)}\nآخرش دکمه‌ی «ثبت نتیجه و شرکت در قرعه‌کشی» رو بزن ✅`, true);
 }
 
 // ---------- the result (owner) ----------
