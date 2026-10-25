@@ -6,7 +6,7 @@ import { tick } from '../lib/timer.js';
 import { aiEnabled } from '../lib/ai.js';
 import { AI_PROMPT } from '../lib/aiflow.js';
 import { welcome, HELP, startSession, showJobs, showChannels, showStats, addHelp, menuKb, sessionCallback } from '../lib/flow.js';
-import { gvJoin, gvMenu, showGvs, loadGv, drawGiveaway, cancelGiveaway } from '../lib/gv.js';
+import { gvJoin, gvMenu, showGvs, loadGv, drawGiveaway, cancelGiveaway, templates } from '../lib/gv.js';
 import { autoPanel, autoAction, draftAction } from '../lib/autopost.js';
 import { predictCallback, channelPredict } from '../lib/predict.js';
 
@@ -45,6 +45,11 @@ async function handle(c, uid, st, data) {
   if (data === 'gv') return gvMenu(uid);
   if (data.startsWith('gvn:')) return startSession(uid, st, 'gv_' + data.slice(4));
   if (data.startsWith('gvq:')) return startSession(uid, st, 'gv_' + data.slice(4), { quick: true });
+  if (data.startsWith('gvt:')) {
+    const t = (await store.isOwner(uid)) && (await templates())[Number(data.slice(4))];
+    if (!t) return gvMenu(uid);
+    return startSession(uid, st, t.kind, { prefill: t.d });
+  }
   if (data === 'gvl') {
     st.w = null; // back from "type the result"
     return showGvs(uid);

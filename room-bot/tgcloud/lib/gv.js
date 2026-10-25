@@ -2,7 +2,7 @@
 import { db } from 'sdk';
 import { sql } from 'sdk/db';
 import { esc, btn, call, send, now, LINE } from './util.js';
-import { localStr, getSetting, setSetting } from './store.js';
+import { localStr, getSetting, setSetting, isOwner } from './store.js';
 
 /** Session data -> the giveaway's settings. */
 export function gvMake(d) {
@@ -84,11 +84,12 @@ async function buildBody(g) {
 // the admin's link buttons stay under the post, also after the draw; so does "predict" until its deadline
 export const predictOpen = (g) => !!g.match && !g.match.result && g.status !== 'cancel' && (!g.match.until || g.match.until > now());
 // ➕/➖ right under the post: everyone shares the buttons, each person's own score shows in a popup
+// (tapping the team name shows it too). Row order is right-to-left in Persian Telegram: ➕ team ➖.
+const styled = (b, style) => ({ ...b, style }); // green / red / blue buttons
 const predictRows = (g) => [
-  [btn(`⚽️ پیش‌بینی: ${g.match.a} - ${g.match.b}`, 'noop')],
-  [btn(`➖ ${g.match.a}`, `pq:${g.id}:a-`), btn(`➕ ${g.match.a}`, `pq:${g.id}:a+`)],
-  [btn(`➖ ${g.match.b}`, `pq:${g.id}:b-`), btn(`➕ ${g.match.b}`, `pq:${g.id}:b+`)],
-  [btn('✅ ثبت پیش‌بینی من', `pq:${g.id}:ok`)],
+  [styled(btn('➕', `pq:${g.id}:a+`), 'success'), btn(`⚽️ ${g.match.a}`, `pq:${g.id}:a`), styled(btn('➖', `pq:${g.id}:a-`), 'danger')],
+  [styled(btn('➕', `pq:${g.id}:b+`), 'success'), btn(`⚽️ ${g.match.b}`, `pq:${g.id}:b`), styled(btn('➖', `pq:${g.id}:b-`), 'danger')],
+  [styled(btn('✅ ثبت نتیجه', `pq:${g.id}:ok`), 'primary')],
 ];
 const linkRows = (g) => [
   ...(predictOpen(g) ? predictRows(g) : []),
@@ -104,7 +105,7 @@ export async function botName() {
   }
   return n;
 }
-export const gvKb = (g) => [[btn(`🎯 شرکت در قرعه‌کشی 🍀  (${g.count}/${g.cap})`, `gj:${g.id}`)], ...linkRows(g)];
+export const gvKb = (g) => [[styled(btn(`🎯 شرکت در قرعه‌کشی 🍀  (${g.count}/${g.cap})`, `gj:${g.id}`), 'success')], ...linkRows(g)];
 
 /** Row + its entries -> the giveaway object used above. */
 export async function loadGv(id) {
@@ -241,7 +242,13 @@ export async function showGvs(uid) {
   return send(uid, '📋 <b>قرعه‌کشی‌های باز من</b>\n\n' + lines.join('\n'), kb);
 }
 
-export function gvMenu(uid) {
+// Ready giveaways saved for the owner (text, photo, prize …): one tap starts it with those filled in.
+export async function templates() {
+  return JSON.parse((await getSetting('gv_templates')) || '[]');
+}
+
+export async function gvMenu(uid) {
+  const tpl = (await isOwner(uid)) ? (await templates()).map((t, i) => [btn(`⭐️ ${t.name} (آماده)`, `gvt:${i}`)]) : [];
   return send(uid, '🎁 <b>قرعه‌کشی</b>\n\nیکی از قالب‌های آماده رو انتخاب کن 👇\n\n' +
     '⚡ <b>سریع:</b> فقط جایزه رو میگی، ۱ برنده بین ۵۰ نفر\n' +
     '❤️ <b>لایک:</b> موتور، گل، هواپیما، مرغ، ماشین (مثلا 2K لایک)\n' +
@@ -251,6 +258,7 @@ export function gvMenu(uid) {
     [btn('⚡ لایک سریع 🍗 (۱ نفر از ۵۰)', 'gvq:chicken')],
     [btn('💰 قرعه‌کشی UC', 'gvn:uc'), btn('🍗 قرعه‌کشی لایک', 'gvn:chicken')],
     [btn('✨ قرعه‌کشی سفارشی', 'gvn:custom')],
+    ...tpl,
     [btn('📋 قرعه‌کشی‌های باز من', 'gvl')],
     [btn('🏠 منو', 'menu')]]);
 }

@@ -90,12 +90,12 @@ export async function channelPredict(c) {
     await db.run(sql`DELETE FROM pdrafts WHERE gid = ${g.id} AND user_id = ${uid}`);
     return toast(`✅ پیش‌بینیت ثبت شد!\n\n${g.match.a}  ${cur.a} - ${cur.b}  ${g.match.b}\n\nقابل تغییر نیست. بعد از بازی نتیجه تو کانال اعلام میشه 🍀`, true);
   }
-  const step = act.endsWith('+') ? 1 : -1;
+  const step = act.endsWith('+') ? 1 : act.endsWith('-') ? -1 : 0; // the team name itself just shows the score
   const a = act.startsWith('a') ? Math.min(MAX, Math.max(0, cur.a + step)) : cur.a;
   const b = act.startsWith('b') ? Math.min(MAX, Math.max(0, cur.b + step)) : cur.b;
   await db.run(sql`INSERT INTO pdrafts (gid, user_id, a, b) VALUES (${g.id}, ${uid}, ${a}, ${b})
     ON CONFLICT(gid, user_id) DO UPDATE SET a = excluded.a, b = excluded.b`);
-  return toast(`${g.match.a}  ${a} - ${b}  ${g.match.b}\n👈 آخرش «✅ ثبت پیش‌بینی من» رو بزن`);
+  return toast(`پیش‌بینی تو:  ${g.match.a} ${a}  -  ${b} ${g.match.b}\n👈 آخرش «✅ ثبت نتیجه» رو بزن`);
 }
 
 const mention = (p) => `<a href="tg://user?id=${p.user_id}">${esc(p.name || 'کاربر')}</a>` + (p.un ? ` (@${esc(p.un)})` : '');
