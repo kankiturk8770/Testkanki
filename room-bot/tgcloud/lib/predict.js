@@ -87,6 +87,7 @@ async function record(g, from, A, B) {
 const faNum = (n) => String(n).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
 const joinedLine = (join) => ({ ok: 'تو قرعه‌کشی هم ثبت شدی 🎟', last: 'تو قرعه‌کشی هم ثبت شدی 🎟',
   dup: 'تو قرعه‌کشی هم ثبت شدی 🎟', full: 'ظرفیت قرعه‌کشی پر بود، ولی پیش‌بینیت حساب میشه 🍀' })[join];
+const keycap = (n) => (n === 10 ? '🔟' : [...String(n)].map((d) => d + '\uFE0F\u20E3').join(''));
 const score = (g, a, b) => `${g.match.a}: ${faNum(a)}\n${g.match.b}: ${faNum(b)}`;
 
 export async function channelPredict(c) {
@@ -110,8 +111,9 @@ export async function channelPredict(c) {
   const b = act.startsWith('b') ? Math.min(MAX, Math.max(0, cur.b + step)) : cur.b;
   await db.run(sql`INSERT INTO pdrafts (gid, user_id, a, b) VALUES (${g.id}, ${uid}, ${a}, ${b})
     ON CONFLICT(gid, user_id) DO UPDATE SET a = excluded.a, b = excluded.b`);
-  // a popup in the middle of the screen: the small toast shows at the very top, far from the post, and is missed
-  return toast(`پیش‌بینی تو:\n${score(g, a, b)}\nآخرش دکمه‌ی «ثبت نتیجه و شرکت در قرعه‌کشی» رو بزن ✅`, true);
+  // the small note at the top, with coloured keycap numbers so it stands out; the line starts with a team name
+  // so it reads right to left (the popup in the middle needed an "OK" on every tap)
+  return toast(`${g.match.a} ${keycap(a)}  ┃  ${keycap(b)} ${g.match.b}`);
 }
 
 // ---------- the result (owner) ----------
