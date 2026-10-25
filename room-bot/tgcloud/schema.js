@@ -88,3 +88,17 @@ export const drafts = table('drafts', {
   status:  text('status').notNull(),
   created: integer('created'),
 });
+
+// Score predictions for a giveaway's match: one per person, final once sent.
+export const predictions = table('predictions', {
+  id:     integer('id').primaryKey({ autoIncrement: true }),
+  gid:    integer('gid').notNull(),
+  userId: integer('user_id').notNull(),
+  name:   text('name'),
+  un:     text('un'),
+  a:      integer('a').notNull(),
+  b:      integer('b').notNull(),
+  ts:     integer('ts').notNull(),
+}, (t) => ({
+  uniq: uniqueIndex('uidx_prediction').on(t.gid, t.userId),
+}));

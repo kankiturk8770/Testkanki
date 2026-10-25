@@ -216,6 +216,16 @@ export async function storeAnswer(uid, st, key, val) {
     }
     if (!btns.length) return send(uid, '⚠️ اینجوری بفرست:\nمتن دکمه | لینک', STEP_BACK);
     d.gbtns = btns.slice(0, 8);
+  } else if (key === 'gmatch') {
+    const [teams, when] = val.split('|').map((x) => x.trim());
+    const ab = teams.split(/\s+(?:-|–|—|🆚|vs\.?|و)\s+|\s*🆚\s*/i).map((x) => x.trim()).filter(Boolean);
+    if (ab.length !== 2) return send(uid, '⚠️ اسم دو تیم رو اینجوری بفرست:\n<code>رئال مادرید - بارسلونا | 22:30</code>', STEP_BACK);
+    let until = null;
+    if (when) {
+      until = await parseWhen(when);
+      if (!until) return send(uid, '⚠️ مهلت رو اینجوری بنویس: 22:30', STEP_BACK);
+    }
+    d.gmatch = { a: ab[0].slice(0, 30), b: ab[1].slice(0, 30), until, result: null };
   } else if (key === 'gtext') {
     d.gtext = val.slice(0, 3500);
   } else if (key === 'pbtn') {

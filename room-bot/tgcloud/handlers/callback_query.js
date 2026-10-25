@@ -8,6 +8,7 @@ import { AI_PROMPT } from '../lib/aiflow.js';
 import { welcome, HELP, startSession, showJobs, showChannels, showStats, addHelp, menuKb, sessionCallback } from '../lib/flow.js';
 import { gvJoin, gvMenu, showGvs, loadGv, drawGiveaway, cancelGiveaway } from '../lib/gv.js';
 import { autoPanel, autoAction, draftAction } from '../lib/autopost.js';
+import { predictCallback } from '../lib/predict.js';
 
 export default async function (c) {
   const data = c.data || '';
@@ -16,6 +17,7 @@ export default async function (c) {
     return tick().catch((e) => console.error('tick', e));
   }
   await call('answerCallbackQuery', { callback_query_id: c.id });
+  if (/^p[pc]:/.test(data)) return predictCallback(c); // anyone's score picker
   const uid = c.from.id;
   await store.user(c.from);
   const st = await store.getSession(uid);
@@ -39,7 +41,16 @@ async function handle(c, uid, st, data) {
   if (data === 'gv') return gvMenu(uid);
   if (data.startsWith('gvn:')) return startSession(uid, st, 'gv_' + data.slice(4));
   if (data.startsWith('gvq:')) return startSession(uid, st, 'gv_' + data.slice(4), { quick: true });
-  if (data === 'gvl') return showGvs(uid);
+  if (data === 'gvl') {
+    st.w = null; // back from "type the result"
+    return showGvs(uid);
+  }
+  if (data.startsWith('mr:')) {
+    const g = await loadGv(data.slice(3));
+    if (!g || g.owner !== uid || !g.match || g.match.result) return send(uid, '⌛️ این بازی دیگه منتظر نتیجه نیست.');
+    st.w = `res:${g.id}`;
+    return send(uid, `⚽️ <b>نتیجه‌ی ${g.match.a} 🆚 ${g.match.b}</b> رو بفرست:\n\nاول گل‌های ${g.match.a}، مثلا <code>2-1</code>\n\n(${g.pcount} نفر پیش‌بینی کردن)`, [[btn('🔙 برگشت', 'gvl')]]);
+  }
   if (data === 'noop') return;
   if (data === 'auto' || /^(au|ap|ar|ax):/.test(data)) {
     if (!(await store.isOwner(uid))) return send(uid, '⛔️ این بخش فقط برای صاحب رباته.');

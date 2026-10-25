@@ -2,7 +2,7 @@
 import { db } from 'sdk';
 import { sql } from 'sdk/db';
 import { esc, btn, call, send, now, LINE } from './util.js';
-import { localStr } from './store.js';
+import { localStr, getSetting, setSetting } from './store.js';
 
 /** Session data -> the giveaway's settings. */
 export function gvMake(d) {
@@ -10,7 +10,7 @@ export function gvMake(d) {
     theme: d.theme, title: d.gtitle || '',
     prize: d.gprize || d.gprize_c || (d.glamt ? `${d.glamt} لایک ${d.glike}` : '-'),
     winners: Number(d.gwin), cap: Number(d.gcap), end: d.gend || 'full', sponsors: d.spons || [], desc: d.desc || null,
-    photo: d.photo || null, text: d.gtext || null, btns: d.gbtns || [],
+    photo: d.photo || null, text: d.gtext || null, btns: d.gbtns || [], match: d.gmatch || null,
   };
 }
 
@@ -43,6 +43,20 @@ const MEDALS = ['🥇', '🥈', '🥉'];
 const winnersLines = (g) => (g.winnersList || []).map((p, i) => `${MEDALS[i] || '🏅'} ${mention(p)}`);
 
 export async function buildGv(g) {
+  return (await buildBody(g)) + (g.status === 'cancel' ? '' : await matchLines(g));
+}
+
+// the prediction part under the post: teams, how many predicted, deadline / result
+async function matchLines(g) {
+  const m = g.match;
+  if (!m) return '';
+  const L = ['', '', `⚽️ <b>${esc(m.a)} 🆚 ${esc(m.b)}</b> · ${g.pcount || 0} پیش‌بینی`];
+  if (m.result) L.push(`🏁 نتیجه: ${esc(m.a)} <b>${m.result[0]} - ${m.result[1]}</b> ${esc(m.b)}`);
+  else if (m.until) L.push(`⏰ مهلت پیش‌بینی: ${await localStr(m.until)}`);
+  return L.join('\n');
+}
+
+async function buildBody(g) {
   const n = g.count;
   if (g.status === 'done') {
     const L = [header(g), '', LINE, '', `🎁 <b>جایزه :</b>  ${esc(g.prize)}`, ''];
@@ -67,8 +81,22 @@ export async function buildGv(g) {
   return L.join('\n');
 }
 
-// the admin's link buttons stay under the post, also after the draw
-const linkRows = (g) => (g.btns || []).map((b) => [{ text: b.t, url: b.u }]);
+// the admin's link buttons stay under the post, also after the draw; so does "predict" until its deadline
+export const predictOpen = (g) => !!g.match && !g.match.result && g.status !== 'cancel' && (!g.match.until || g.match.until > now());
+const linkRows = (g) => [
+  ...(predictOpen(g) && g.bot ? [[{ text: '⚽️ پیش‌بینی نتیجه', url: `https://t.me/${g.bot}?start=pr_${g.id}` }]] : []),
+  ...(g.btns || []).map((b) => [{ text: b.t, url: b.u }]),
+];
+
+export async function botName() {
+  let n = await getSetting('bot_username');
+  if (!n) {
+    const me = await call('getMe', {});
+    n = me.ok ? me.result.username : null;
+    if (n) await setSetting('bot_username', n);
+  }
+  return n;
+}
 export const gvKb = (g) => [[btn(`🎯 شرکت در قرعه‌کشی 🍀  (${g.count}/${g.cap})`, `gj:${g.id}`)], ...linkRows(g)];
 
 /** Row + its entries -> the giveaway object used above. */
@@ -76,8 +104,9 @@ export async function loadGv(id) {
   const r = await db.get(sql`SELECT * FROM giveaways WHERE id = ${Number(id)}`);
   if (!r) return null;
   const count = (await db.get(sql`SELECT COUNT(*) AS n FROM entries WHERE gid = ${r.id}`)).n;
+  const pcount = (await db.get(sql`SELECT COUNT(*) AS n FROM predictions WHERE gid = ${r.id}`)).n;
   return { ...JSON.parse(r.data), id: r.id, owner: r.owner, chatId: r.chat_id, msgId: r.msg_id, status: r.status,
-    endsAt: r.ends_at, winnersList: r.winners ? JSON.parse(r.winners) : null, count };
+    endsAt: r.ends_at, winnersList: r.winners ? JSON.parse(r.winners) : null, count, pcount, bot: await botName() };
 }
 
 // The post is a photo with the text as caption (asCaption), or a text message (with a photo above it, or none).
@@ -87,9 +116,12 @@ async function editPost(g, kb = null) {
   return call('editMessageText', { chat_id: g.chatId, message_id: g.msgId, text: await buildGv(g), parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...rm });
 }
 const refreshPost = (g) => editPost(g, gvKb(g));
+/** The post after a change, whatever state it's in. */
+export const refreshAny = (g) => (g.status === 'open' ? refreshPost(g) : editPost(g, linkRows(g).length ? linkRows(g) : null));
 
 /** The giveaway post: photo first, the text under it, the join button under that (a caption holds 1024 characters). */
 export async function sendGvPost(chatId, g) {
+  g.bot ||= await botName();
   const text = await buildGv(g);
   const kb = { reply_markup: { inline_keyboard: gvKb(g) } };
   if (g.photo && text.length <= 1024) {
@@ -104,7 +136,7 @@ export async function sendGvPost(chatId, g) {
 export async function openGiveaway(uid, chatId, d, pin) {
   const g = { ...gvMake(d), owner: uid, chatId, status: 'open', count: 0 };
   g.endsAt = calcEnd(g.end);
-  const data = { theme: g.theme, title: g.title, prize: g.prize, winners: g.winners, cap: g.cap, end: g.end, sponsors: g.sponsors, desc: g.desc, photo: g.photo, text: g.text, btns: g.btns };
+  const data = { theme: g.theme, title: g.title, prize: g.prize, winners: g.winners, cap: g.cap, end: g.end, sponsors: g.sponsors, desc: g.desc, photo: g.photo, text: g.text, btns: g.btns, match: g.match };
   const row = (await db.run(sql`INSERT INTO giveaways (owner, chat_id, data, status, ends_at, created)
     VALUES (${uid}, ${chatId}, ${JSON.stringify(data)}, 'open', ${g.endsAt}, ${now()}) RETURNING id`)).rows[0];
   g.id = row.id;
@@ -187,13 +219,16 @@ export async function gvJoin(c) {
 }
 
 export async function showGvs(uid) {
-  const rows = await db.all(sql`SELECT id FROM giveaways WHERE owner = ${uid} AND status = 'open' ORDER BY id`);
+  // open giveaways, and finished ones whose match still waits for its result
+  const rows = (await db.all(sql`SELECT id, status, data FROM giveaways WHERE owner = ${uid} AND status != 'cancel' ORDER BY id`))
+    .filter((r) => r.status === 'open' || (JSON.parse(r.data).match && !JSON.parse(r.data).match.result));
   if (!rows.length) return send(uid, '📋 قرعه‌کشی بازی نداری.', [[btn('🎁 قرعه‌کشی جدید', 'gv')], [btn('🏠 منو', 'menu')]]);
   const kb = [], lines = [];
   for (const { id } of rows) {
     const g = await loadGv(id);
-    lines.push(`▫️ <b>#${g.id}</b> · ${esc(g.prize)} · 👥 ${g.count}/${g.cap}`);
-    kb.push([btn(`🎲 تعیین برنده #${g.id}`, `gd:${g.id}`), btn(`⛔️ لغو #${g.id}`, `gx:${g.id}`)]);
+    lines.push(`▫️ <b>#${g.id}</b> · ${esc(g.prize)} · 👥 ${g.count}/${g.cap}${g.status === 'open' ? '' : ' · قرعه انجام شده'}`);
+    if (g.status === 'open') kb.push([btn(`🎲 تعیین برنده #${g.id}`, `gd:${g.id}`), btn(`⛔️ لغو #${g.id}`, `gx:${g.id}`)]);
+    if (g.match && !g.match.result) kb.push([btn(`⚽️ ثبت نتیجه‌ی بازی #${g.id} (${g.pcount} پیش‌بینی)`, `mr:${g.id}`)]);
   }
   kb.push([btn('🏠 منو', 'menu')]);
   return send(uid, '📋 <b>قرعه‌کشی‌های باز من</b>\n\n' + lines.join('\n'), kb);

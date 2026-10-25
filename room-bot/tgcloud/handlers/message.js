@@ -8,6 +8,7 @@ import {
   makeJob, parseWhen, menuKb, ask, STEP_BACK,
 } from '../lib/flow.js';
 import { gvMenu } from '../lib/gv.js';
+import { predictStart, setResult } from '../lib/predict.js';
 import { autoPanel, setTimes, setSources, setCreators } from '../lib/autopost.js';
 
 // Settings the owner can set from the chat (keys never go in the code).
@@ -18,6 +19,7 @@ const fwdChat = (m) => m.forward_from_chat || m.forward_origin?.chat || null;
 
 async function command(m, uid, st, cmd, arg, rest) {
   st.w = null;
+  if (cmd === '/start' && /^pr_\d+$/.test(arg)) return predictStart(uid, Number(arg.slice(3))); // from a channel post
   if (cmd === '/start' || cmd === '/menu') return welcome(uid, m.from?.first_name || '');
   if (cmd === '/help') return send(uid, HELP, [[btn('🏠 منو', 'menu')]]);
   if (cmd === '/new') return startSession(uid, st, 'room');
@@ -97,6 +99,11 @@ async function handle(m, uid, st) {
     return;
   }
   if (st.w === 'ai' && t) return aiCreate(uid, st, t);
+  if (st.w?.startsWith('res:') && t) {
+    const gid = Number(st.w.slice(4));
+    st.w = null;
+    return setResult(uid, gid, t);
+  }
   if (st.w === 'autotimes' && t) return setTimes(uid, st, t);
   if (st.w === 'autosrc' && t) return setSources(uid, st, t);
   if (st.w === 'autoyt' && t) return setCreators(uid, st, t);
