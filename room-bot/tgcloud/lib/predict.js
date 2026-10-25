@@ -71,18 +71,31 @@ async function record(g, from, A, B) {
   return true;
 }
 
-/** pq:<gid>:<a>:<b> — a score button under the channel post: saved in one tap, the answer is a popup. */
+/**
+ * pq:<gid>:a+|a-|b+|b-|ok — the ➕/➖ under the channel post. The buttons are the same for everyone, so each
+ * person's score lives in pdrafts and shows in the little popup; "ok" makes it final.
+ */
 export async function channelPredict(c) {
-  const [, gid, a, b] = c.data.split(':');
-  const ans = (text) => call('answerCallbackQuery', { callback_query_id: c.id, text, show_alert: true });
-  if (c.from.is_bot) return ans('');
+  const [, gid, act] = c.data.split(':');
+  const uid = c.from.id;
+  const toast = (text, alert = false) => call('answerCallbackQuery', { callback_query_id: c.id, text, show_alert: alert });
+  if (c.from.is_bot) return toast('');
   const g = await loadGv(gid);
   const plain = (h) => h.replace(/<[^>]+>/g, '');
-  const why = await blocked(g, c.from.id);
-  if (why) return ans(plain(why));
-  const A = Number(a), B = Number(b);
-  if (!(await record(g, c.from, A, B))) return ans(plain((await blocked(g, c.from.id)) || '✅ ثبت شده.'));
-  return ans(`✅ پیش‌بینیت ثبت شد!\n\n${g.match.a}  ${A} - ${B}  ${g.match.b}\n\nقابل تغییر نیست. بعد از بازی نتیجه تو کانال اعلام میشه 🍀`);
+  const why = await blocked(g, uid);
+  if (why) return toast(plain(why), true);
+  const cur = (await db.get(sql`SELECT a, b FROM pdrafts WHERE gid = ${g.id} AND user_id = ${uid}`)) || { a: 0, b: 0 };
+  if (act === 'ok') {
+    if (!(await record(g, c.from, cur.a, cur.b))) return toast(plain((await blocked(g, uid)) || '✅ ثبت شده.'), true);
+    await db.run(sql`DELETE FROM pdrafts WHERE gid = ${g.id} AND user_id = ${uid}`);
+    return toast(`✅ پیش‌بینیت ثبت شد!\n\n${g.match.a}  ${cur.a} - ${cur.b}  ${g.match.b}\n\nقابل تغییر نیست. بعد از بازی نتیجه تو کانال اعلام میشه 🍀`, true);
+  }
+  const step = act.endsWith('+') ? 1 : -1;
+  const a = act.startsWith('a') ? Math.min(MAX, Math.max(0, cur.a + step)) : cur.a;
+  const b = act.startsWith('b') ? Math.min(MAX, Math.max(0, cur.b + step)) : cur.b;
+  await db.run(sql`INSERT INTO pdrafts (gid, user_id, a, b) VALUES (${g.id}, ${uid}, ${a}, ${b})
+    ON CONFLICT(gid, user_id) DO UPDATE SET a = excluded.a, b = excluded.b`);
+  return toast(`${g.match.a}  ${a} - ${b}  ${g.match.b}\n👈 آخرش «✅ ثبت پیش‌بینی من» رو بزن`);
 }
 
 const mention = (p) => `<a href="tg://user?id=${p.user_id}">${esc(p.name || 'کاربر')}</a>` + (p.un ? ` (@${esc(p.un)})` : '');

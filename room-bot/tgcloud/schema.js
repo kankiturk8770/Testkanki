@@ -102,3 +102,14 @@ export const predictions = table('predictions', {
 }, (t) => ({
   uniq: uniqueIndex('uidx_prediction').on(t.gid, t.userId),
 }));
+
+// A score someone is setting with ➕/➖ under a channel post, until they press "send".
+export const pdrafts = table('pdrafts', {
+  id:     integer('id').primaryKey({ autoIncrement: true }),
+  gid:    integer('gid').notNull(),
+  userId: integer('user_id').notNull(),
+  a:      integer('a').notNull(),
+  b:      integer('b').notNull(),
+}, (t) => ({
+  uniq: uniqueIndex('uidx_pdraft').on(t.gid, t.userId),
+}));

@@ -83,12 +83,12 @@ async function buildBody(g) {
 
 // the admin's link buttons stay under the post, also after the draw; so does "predict" until its deadline
 export const predictOpen = (g) => !!g.match && !g.match.result && g.status !== 'cancel' && (!g.match.until || g.match.until > now());
-// the common scores are buttons right under the post (one tap, in the channel); any other score opens the bot
-const SCORES = [[1, 0], [2, 0], [2, 1], [3, 1], [0, 0], [1, 1], [2, 2], [3, 3], [0, 1], [0, 2], [1, 2], [1, 3]];
+// ➕/➖ right under the post: everyone shares the buttons, each person's own score shows in a popup
 const predictRows = (g) => [
   [btn(`⚽️ پیش‌بینی: ${g.match.a} - ${g.match.b}`, 'noop')],
-  ...[0, 4, 8].map((i) => SCORES.slice(i, i + 4).map(([a, b]) => btn(`${a}-${b}`, `pq:${g.id}:${a}:${b}`))),
-  ...(g.bot ? [[{ text: '🔢 نتیجه‌ی دیگه', url: `https://t.me/${g.bot}?start=pr_${g.id}` }]] : []),
+  [btn(`➖ ${g.match.a}`, `pq:${g.id}:a-`), btn(`➕ ${g.match.a}`, `pq:${g.id}:a+`)],
+  [btn(`➖ ${g.match.b}`, `pq:${g.id}:b-`), btn(`➕ ${g.match.b}`, `pq:${g.id}:b+`)],
+  [btn('✅ ثبت پیش‌بینی من', `pq:${g.id}:ok`)],
 ];
 const linkRows = (g) => [
   ...(predictOpen(g) ? predictRows(g) : []),
