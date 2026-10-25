@@ -95,7 +95,8 @@ export async function channelPredict(c) {
   const b = act.startsWith('b') ? Math.min(MAX, Math.max(0, cur.b + step)) : cur.b;
   await db.run(sql`INSERT INTO pdrafts (gid, user_id, a, b) VALUES (${g.id}, ${uid}, ${a}, ${b})
     ON CONFLICT(gid, user_id) DO UPDATE SET a = excluded.a, b = excluded.b`);
-  return toast(`پیش‌بینی تو:  ${g.match.a} ${a}  -  ${b} ${g.match.b}\n👈 آخرش «✅ ثبت نتیجه» رو بزن`);
+  // a popup in the middle of the screen: the small toast shows at the very top, far from the post, and is missed
+  return toast(`⚽️ پیش‌بینی تو:\n\n${g.match.a}  ${a}  -  ${b}  ${g.match.b}\n\n👈 آخرش «✅ ثبت نتیجه» رو بزن`, true);
 }
 
 // ---------- the result (owner) ----------
